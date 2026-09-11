@@ -52,6 +52,9 @@ build-backend = "setuptools.build_meta"
 include = ["opticstream*"]
 exclude = ["notebooks*"]
 
+[tool.setuptools.package-data]
+opticstream = ["matlab/*.m", "matlab/+psoct/+spectral/*.m", "matlab/*.md"]
+
 [tool.pytest.ini_options]
 addopts = '-m "not integration"'
 testpaths = ["tests"]

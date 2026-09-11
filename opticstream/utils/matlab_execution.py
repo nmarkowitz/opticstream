@@ -69,7 +69,13 @@ def run_matlab_batch_command_or_cli(
     """
     logger = get_run_logger()
     resolved_path = resolve_matlab_root(matlab_script_path)
-    matlab_cmd = f"addpath(genpath('{resolved_path}'));{command}"
+    bundled_path = Path(__file__).resolve().parents[1] / "matlab"
+    root_literal = str(resolved_path).replace("'", "''")
+    bundled_literal = str(bundled_path).replace("'", "''")
+    matlab_cmd = (
+        f"addpath(genpath('{root_literal}'));"
+        f"addpath('{bundled_literal}', '-begin');{command}"
+    )
     logger.info(f"MATLAB command: {matlab_cmd}")
     if _is_matlab_engine_available():
         import matlab.engine  # type: ignore[import-not-found]
