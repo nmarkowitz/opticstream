@@ -194,7 +194,7 @@ class PSOCTProcessingParams(BaseModel):
     )
 
     surface_spec: Optional[str] = Field(
-        default="gradient ",
+        default="gradient",
         description="Surface extraction spec string",
     )
     matlab_num_workers: Optional[int] = Field(

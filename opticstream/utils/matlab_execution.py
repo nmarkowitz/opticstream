@@ -56,7 +56,8 @@ def run_matlab_batch_command_or_cli(
     """
     Run a MATLAB batch command via the Engine when available, else ``matlab -batch``.
 
-    Uses ``addpath(genpath(root));`` as preamble in both the engine and CLI paths.
+    Loads the toolbox and bundled overrides, then clears cached functions and
+    refreshes the MATLAB path in both the engine and CLI paths.
 
     Parameters
     ----------
@@ -74,7 +75,8 @@ def run_matlab_batch_command_or_cli(
     bundled_literal = str(bundled_path).replace("'", "''")
     matlab_cmd = (
         f"addpath(genpath('{root_literal}'));"
-        f"addpath('{bundled_literal}', '-begin');{command}"
+        f"addpath('{bundled_literal}', '-begin');"
+        f"clear functions;rehash;{command}"
     )
     logger.info(f"MATLAB command: {matlab_cmd}")
     if _is_matlab_engine_available():
