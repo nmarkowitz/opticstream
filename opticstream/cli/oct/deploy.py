@@ -93,18 +93,6 @@ def deploy(
     # Upload Flow Deployments
     # ============================================================================
 
-    upload_to_linc_batch_event_flow.from_source(
-        source=Path(__file__).parent.parent.parent / "flows",
-        entrypoint="psoct/tile_batch_upload_flow.py:upload_to_linc_batch_event_flow",
-    ).deploy(
-        name=deployment_name,
-        work_pool_name=work_pool_name,
-        tags=["event-driven", "tile-batch", "upload-to-linc", *COMMON_TAGS],
-        triggers=[get_event_trigger(BATCH_ARCHIVED, project_name=project_name)],
-        build=False,
-        push=False,
-    )
-
     upload_mosaic_enface_to_dandi_event_flow.from_source(
         source=Path(__file__).parent.parent.parent / "flows",
         entrypoint="psoct/mosaic_upload_flow.py:upload_mosaic_enface_to_dandi_event_flow",

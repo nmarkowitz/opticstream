@@ -11,6 +11,7 @@ dependencies = [
     "psoct-toolbox @ git+https://github.com/calvinchai/psoct-toolbox.git@5182337044d2b7f8337ca205a33c9da3ddd69bda",
     "matplotlib>=3.10.8",
     "prefect[shell,slack,sqlalchemy]>=3.6.20",
+    "dandi>=0.78.0",
     "watchdog",
     "psutil",
     "slack-sdk",

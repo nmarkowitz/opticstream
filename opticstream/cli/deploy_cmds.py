@@ -66,7 +66,7 @@ FLOW_DEPLOYMENTS: Dict[str, FlowDeploymentSpec] = {
             # Note: mosaic enface/volume uploads are deployed via `opticstream cli oct deploy`.
             # This CLI entry covers only the tile-batch upload flow.
             # Add mosaic upload deployments here only if their modules define `__main__` deployments.
-            "upload_to_linc_batch_event_flow_deployment",
+            "upload_to_dandi_batch_event_flow_deployment",
         ),
         description="Upload flow for tile batches to DANDI.",
     ),

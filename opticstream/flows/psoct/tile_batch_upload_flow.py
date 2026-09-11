@@ -32,7 +32,7 @@ def upload_to_dandi_tile_batch(
     batch_id: OCTBatchId,
     file_list: list[Path],
     *,
-    dandi_instance: str = "linc",
+    dandi_instance: str = "dandi",
     realpath: bool = True,
     dandi_api_key: Secret | None = None,
     force_rerun: bool = False,
@@ -51,7 +51,7 @@ def upload_to_dandi_tile_batch(
 
 
 @flow
-def upload_to_linc_batch_event_flow(payload: Dict[str, Any]) -> None:
+def upload_to_dandi_batch_event_flow(payload: Dict[str, Any]) -> None:
     batch_ident = batch_ident_from_payload(payload)
     cfg = load_scan_config_for_payload(payload)
     return upload_to_dandi_tile_batch(
@@ -71,13 +71,13 @@ def to_deployment(
     """
     Create both deployments:
     - manual `upload_to_dandi_tile_batch` (ad-hoc reruns)
-    - event-driven `upload_to_linc_batch_event_flow` (triggered by BATCH_ARCHIVED)
+    - event-driven DANDI upload (triggered by BATCH_ARCHIVED)
     """
     manual = upload_to_dandi_tile_batch.to_deployment(
         name=deployment_name,
         tags=["tile-batch", "upload-to-linc", *list(extra_tags)],
     )
-    event = upload_to_linc_batch_event_flow.to_deployment(
+    event = upload_to_dandi_batch_event_flow.to_deployment(
         name=deployment_name,
         tags=["event-driven", "tile-batch", "upload-to-linc", *list(extra_tags)],
         triggers=[get_event_trigger(BATCH_ARCHIVED, project_name=project_name)],

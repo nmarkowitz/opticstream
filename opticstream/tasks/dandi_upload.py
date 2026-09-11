@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from prefect import get_run_logger, task
@@ -47,12 +48,10 @@ def build_dandi_upload_command(
     if dandi_instance != "dandi":
         command += f"-i {shlex.quote(dandi_instance)} "
 
-    # Match the CLI flags used elsewhere in the codebase.
-    command += f"{file_paths_str} -J {shlex.quote(max_jobs)} --allow-any-path"
-    if dandi_instance == "dandi" or True:
-        command += " --existing overwrite --validation skip"
-    else:
-        command += " --existing OVERWRITE --validation SKIP"
+    command += f"{file_paths_str} -J {shlex.quote(max_jobs)}"
+    if dandi_instance != "dandi":
+        command += " --allow-any-path"
+    command += " --existing overwrite --validation skip"
 
     # DANDI CLI errors can sometimes be clearer when run from file directory.
     working_dir = os.path.dirname(file_list[0]) if file_list[0] else os.getcwd()
@@ -93,6 +92,48 @@ def _build_dandi_upload_env(
     }
 
 
+def _upload_dandi_api(
+    file_list: List[str],
+    *,
+    max_jobs: str,
+) -> None:
+    """Upload DANDI assets through the API, including generic NIfTI files.
+
+    Recent DANDI CLIs filter unrecognized files before upload and no longer
+    provide the ``--allow-any-path`` switch.  The API equivalent is
+    ``allow_any_path=True``.
+    """
+    from dandi.upload import UploadExisting, UploadValidation, upload
+
+    try:
+        jobs, jobs_per_file = (int(part) for part in max_jobs.split(":", 1))
+    except (ValueError, AttributeError):
+        jobs = jobs_per_file = 5
+
+    paths = [Path(os.path.realpath(path)) for path in file_list]
+    # DANDI needs the local dandiset metadata alongside assets in order to
+    # resolve the target dataset.  Walk upward from each asset and include the
+    # nearest dandiset.yaml once when it exists (e.g. .../001769/dandiset.yaml).
+    metadata_paths: list[Path] = []
+    for path in paths:
+        for parent in (path.parent, *path.parents):
+            metadata = parent / "dandiset.yaml"
+            if metadata.is_file():
+                if metadata not in metadata_paths:
+                    metadata_paths.append(metadata)
+                break
+
+    upload(
+        paths=[*paths, *metadata_paths],
+        existing=UploadExisting.OVERWRITE,
+        validation=UploadValidation.SKIP,
+        dandi_instance="dandi",
+        allow_any_path=True,
+        jobs=jobs,
+        jobs_per_file=jobs_per_file,
+    )
+
+
 @task(tags=["dandi-upload"], retries=1)
 def upload_to_dandi_batch(
     file_list: List[str],
@@ -124,6 +165,11 @@ def upload_to_dandi_batch(
 
     logger.info("Running DANDI batch upload with %s files", len(file_list))
     logger.info(command)
+
+    if dandi_instance == "dandi":
+        _upload_dandi_api(file_list, max_jobs=max_jobs)
+        logger.info("DANDI batch upload completed")
+        return
 
     with ShellOperation(
         commands=[command],
