@@ -44,6 +44,22 @@ def build_tile_file_reference_list(
     grid_size_x = mosaic_context.grid_size_x(config)
     refs: dict[int, TileFileReference] = defaultdict(TileFileReference)
     for p in file_list:
+        if config.acquisition.filename_pattern:
+            from opticstream.utils.oct_input_naming import parse_input_name
+            parsed = parse_input_name(p.name, config.acquisition, mosaics_per_slice)
+            if parsed is None:
+                raise ValueError(f"Filename does not match configured input naming: {p.name}")
+            tile_number = parsed.image_index
+            modality = parsed.modality
+            if modality == "processed":
+                modality = "complex" if config.acquisition.tile_saving_type in (TileSavingType.COMPLEX_WITH_SPECTRAL, TileSavingType.COMPLEX) else "dbi"
+            field = f"{modality}_file_path"
+            ref = refs[tile_number]
+            if getattr(ref, field) is not None:
+                raise ValueError(f"Duplicate {modality} input for tile {tile_number}: {p}")
+            ref.tile_number = tile_number
+            setattr(ref, field, p)
+            continue
         if mosaics_per_slice == 2:
             tile_number = extract_tile_number_from_filename(str(p))
         else:

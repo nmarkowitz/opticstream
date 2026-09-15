@@ -56,6 +56,43 @@ class PSOCTAcquisitionParams(BaseModel):
     """Physical / hardware facts about the acquisition."""
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    filename_pattern: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional full input filename template; null preserves legacy naming. "
+            "Example: sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acquisition}_{modality}{extension}. "
+            "slice037/chunk-0041/acq-normal0deg means slice 37, image 41, and the mosaic slot mapped from normal0deg. "
+            "Required placeholders: {slice}, {image}, {acquisition}; optional: {subject}, {modality}, {extension}. "
+            "Numbers accept zero padding; do not use :04d format specifiers. Literals and labels are case-sensitive. "
+            "Suffixes/extensions may be literals or placeholders; matching an extension does not add support for its file format."
+        ),
+    )
+    acquisition_mosaic_map: Dict[str, int] = Field(
+        default_factory=lambda: {"normal0deg": 1, "tilted15deg": 2},
+        description="Exact acquisition labels mapped to 1-based mosaic slots within each slice. Edit angles freely, e.g. normal5deg: 1. Slot 1 is normal; remaining slots follow the project's existing mosaic ordering. Source mosaic = (slice - 1) * mosaics_per_slice + slot.",
+    )
+    filename_default_modality: str = Field(
+        default="spectral", description="Modality label when filename_pattern omits {modality}, including patterns with a literal suffix.",
+    )
+    filename_modality_map: Dict[str, Literal["spectral", "complex", "processed", "aip", "mip", "ori", "ret", "surf", "dbi"]] = Field(
+        default_factory=lambda: {key: key for key in ("spectral", "complex", "processed", "aip", "mip", "ori", "ret", "surf", "dbi")},
+        description="Map filename modality labels to processing types; e.g. rawscan: spectral. Unknown labels are ignored. No fixed _spectral.nii suffix is required.",
+    )
+
+    @field_validator("filename_pattern")
+    @classmethod
+    def validate_filename_pattern(cls, value):
+        if value is not None:
+            from opticstream.utils.oct_input_naming import compile_pattern
+            compile_pattern(value)
+        return value
+
+    @field_validator("acquisition_mosaic_map")
+    @classmethod
+    def validate_acquisition_mosaic_map(cls, value):
+        if any(not label or slot < 1 for label, slot in value.items()):
+            raise ValueError("Acquisition labels must be nonempty and mosaic slots positive.")
+        return value
     grid_size_x_normal: int = Field(
         ...,
         ge=1,

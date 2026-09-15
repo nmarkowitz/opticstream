@@ -202,7 +202,7 @@ class OCTWatcherService:
 
         logger.debug("Scanning folder: %s", self.folder_path)
 
-        if self.scan_config.mosaics_per_slice == 3:
+        if self.scan_config.mosaics_per_slice == 3 and not getattr(self.scan_config.acquisition, "filename_pattern", None):
             candidates = self._discover_three_mosaic_candidates()
         else:
             candidates = self._discover_two_mosaic_candidates()
@@ -302,6 +302,12 @@ class OCTWatcherService:
                 continue
 
             parsed: ParsedTileFile | None = None
+            if getattr(self.scan_config.acquisition, "filename_pattern", None):
+                from opticstream.utils.oct_input_naming import parse_input_name
+                custom = parse_input_name(path.name, self.scan_config.acquisition, self.scan_config.mosaics_per_slice)
+                if custom is not None:
+                    out.append(ParsedTileFile(path=path, source_mosaic_id=custom.source_mosaic_id, image_index=custom.image_index))
+                continue
             for parser in (
                 self._parse_complex_file,
                 self._parse_spectral_nii_file,
@@ -475,6 +481,12 @@ class OCTWatcherService:
         )
 
     def _image_index_from_file(self, path: Path) -> int:
+        if getattr(self.scan_config.acquisition, "filename_pattern", None):
+            from opticstream.utils.oct_input_naming import parse_input_name
+            custom = parse_input_name(path.name, self.scan_config.acquisition, self.scan_config.mosaics_per_slice)
+            if custom is None:
+                raise ValueError(f"Filename does not match configured input naming: {path.name}")
+            return custom.image_index
         for parser in (
             self._parse_complex_file,
             self._parse_spectral_nii_file,

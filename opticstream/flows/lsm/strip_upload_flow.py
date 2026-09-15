@@ -24,6 +24,7 @@ from opticstream.flows.lsm.utils import (
 from opticstream.state.lsm_project_state import LSMStripId
 from opticstream.tasks.dandi_upload import upload_to_dandi
 from opticstream.hooks.slack_notification_hook import slack_notification_hook
+from opticstream.utils.upload_settings import upload_flow_enabled
 
 
 @flow(
@@ -31,6 +32,7 @@ from opticstream.hooks.slack_notification_hook import slack_notification_hook
     on_completion=[publish_lsm_slice_hook, publish_lsm_project_hook],
     on_failure=[slack_notification_hook],
 )
+@upload_flow_enabled
 @strip_processing_milestone(field_name="uploaded", success_event=STRIP_UPLOADED)
 def upload_strip_to_dandi_flow(
     strip_ident: LSMStripId,

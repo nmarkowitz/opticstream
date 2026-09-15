@@ -20,6 +20,7 @@ from opticstream.state.oct_project_state import OCTBatchId
 from opticstream.state.state_guards import force_rerun_from_payload
 from opticstream.tasks.dandi_upload import upload_to_dandi_batch
 from opticstream.hooks.slack_notification_hook import slack_notification_hook
+from opticstream.utils.upload_settings import upload_flow_enabled
 
 
 @flow(
@@ -27,6 +28,7 @@ from opticstream.hooks.slack_notification_hook import slack_notification_hook
     on_completion=[publish_oct_mosaic_hook, publish_oct_project_hook],
     on_failure=[slack_notification_hook],
 )
+@upload_flow_enabled
 @oct_batch_processing_milestone(field_name="uploaded", success_event=BATCH_UPLOADED)
 def upload_to_dandi_tile_batch(
     batch_id: OCTBatchId,
