@@ -1,6 +1,7 @@
-function correction = opticstream_read_dispersion(filename, spectra)
-% Text: N complex rows, N-by-2 real/imaginary pairs, or N phase angles.
-% Binary (.dat/.bin): N native-endian float64 phase angles, legacy convention.
+function [correction1, correction2] = opticstream_read_dispersion(filename, spectra)
+% Text: 2N complex rows, 2N-by-2 real/imaginary pairs, or 2N phase angles.
+% Binary (.dat/.bin): 2N native-endian float64 phase angles, legacy convention.
+% The first N coefficients apply to channel 1; the second N apply to channel 2.
 % A complex pair counts as ONE spectral coefficient.
 [~,~,ext] = fileparts(filename);
 if any(strcmpi(ext, {'.txt', '.csv', '.tsv'}))
@@ -36,10 +37,14 @@ else
     end
     correction = exp(-1i .* fread(fid, inf, 'double'));
 end
-if numel(correction) ~= spectra || any(~isfinite(correction(:)))
+expectedCoefficients = 2 * spectra;
+if numel(correction) ~= expectedCoefficients || any(~isfinite(correction(:)))
     error('spectral2complex:BadDispersionLength', ...
-        'Dispersion file "%s" has %d coefficients; NIfTI requires exactly %d finite coefficients.', ...
-        filename, numel(correction), spectra);
+        ['Dispersion file "%s" has %d coefficients; NIfTI requires exactly %d finite ' ...
+         'coefficients (%d per channel).'], ...
+        filename, numel(correction), expectedCoefficients, spectra);
 end
 correction = correction(:);
+correction1 = correction(1:spectra);
+correction2 = correction(spectra+1:end);
 end

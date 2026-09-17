@@ -116,12 +116,9 @@ params.Wavelengths_l          = Wavelengths_l;
 params.Wavelengths_r          = Wavelengths_r;
 params.InterpolatedWavelengths = InterpolatedWavelengths2;
 
-% Read dispersion correction file(s)
-dispCompFile1 = dispCompFile;
-dispCompFile2 = dispCompFile;
-
-phaseCorrection1 = opticstream_read_dispersion(dispCompFile1, AlineLength);
-phaseCorrection2 = opticstream_read_dispersion(dispCompFile2, AlineLength);
+% Read the channel-specific corrections from the two halves of one file.
+[phaseCorrection1, phaseCorrection2] = ...
+    opticstream_read_dispersion(dispCompFile, AlineLength);
 
 % Replicate along A-line dimension to match interpolated buffer size
 phaseCorrection1 = repmat(phaseCorrection1, 1, Aline);

@@ -15,9 +15,9 @@ Dispersion formats:
   columns, or one complex multiplier per row (e.g. 0.98+0.12i).
 - Other extensions: native-endian binary float64 phase angles.
 
-The file must contain exactly one finite coefficient per spectral sample.
+The file must contain exactly two finite coefficients per spectral sample:
+the first half applies to channel 1 and the second half applies to channel 2.
 Complex multipliers are applied directly; phase angles use exp(-1i*phase).
-The same correction is used for both channels, as in the upstream reader.
 No coefficients are silently truncated, padded or recalibrated.
 
 The legacy wavelength calibration and channel-2 reversal remain in use;

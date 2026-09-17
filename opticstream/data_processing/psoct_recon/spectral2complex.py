@@ -44,6 +44,24 @@ def read_spectral_file_raw(filename, header_bytes=352):
     return np.frombuffer(raw, dtype=np.uint16)
 
 
+def _load_dispersion_channels(filename, samples_per_channel):
+    """Load two consecutive float64 phase vectors from one binary file."""
+    phase_dispersion = np.fromfile(filename, dtype=np.float64)
+    expected_values = 2 * samples_per_channel
+    if phase_dispersion.size != expected_values:
+        raise ValueError(
+            f"Dispersion file {filename!s} has {phase_dispersion.size} values; "
+            f"expected {expected_values} ({samples_per_channel} per channel)."
+        )
+    if not np.isfinite(phase_dispersion).all():
+        raise ValueError(f"Dispersion file {filename!s} contains non-finite values.")
+
+    return (
+        phase_dispersion[:samples_per_channel],
+        phase_dispersion[samples_per_channel:],
+    )
+
+
 def save_jstack_nifti(Jstack_all, output_file):
     """
     Save Jstack_all to a NIfTI file (float32).
@@ -155,7 +173,9 @@ def spectral2complex(
     Input:
       - spectral_array: MUST be shaped as (AlineLength, Aline, 2, Bline)
                         (dtype can be uint16 or numeric; will be cast to float64)
-      - disp_comp_file: optional binary float64 dispersion correction file path (used for both channels)
+      - disp_comp_file: optional binary float64 dispersion correction file path.
+                        The first AlineLength values apply to channel 1 and
+                        the second AlineLength values apply to channel 2.
       - AlineLength, AutoCorrPeakCut, PaddingFactor: processing parameters (kept for compatibility)
     Output:
       - Jstack_all: numpy array shaped (4*Aline, Bline, Depth)
@@ -200,10 +220,11 @@ def spectral2complex(
     )
     newLen = InterpolatedWavelengths2.shape[0]
 
-    # Load dispersion correction if provided (same for both channels)
+    # Load the channel-specific dispersion corrections.
     if disp_comp_file is not None:
-        phaseDispersion = np.fromfile(disp_comp_file, dtype=np.float64)
-        phaseDispersion1 = phaseDispersion2 = phaseDispersion
+        phaseDispersion1, phaseDispersion2 = _load_dispersion_channels(
+            disp_comp_file, AlineLength
+        )
     else:
         phaseDispersion1 = phaseDispersion2 = np.zeros(PaddingLength, dtype=np.float64)
 
@@ -357,7 +378,10 @@ def parse_args():
     p.add_argument(
         "--disp_comp",
         default=None,
-        help="Optional dispersion correction binary float64 file (applied to both channels).",
+        help=(
+            "Optional dispersion correction binary float64 file; the first half "
+            "applies to channel 1 and the second half to channel 2."
+        ),
     )
     p.add_argument(
         "--save", action="store_true", help="If set, save output NIfTI to --output"

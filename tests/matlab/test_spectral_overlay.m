@@ -6,13 +6,16 @@ cleanup = onCleanup(@() rmdir(folder, 's'));
 for n = [1152 1153 2048]
     file = fullfile(folder, 'disp.txt');
     fid = fopen(file, 'w');
-    fprintf(fid, '0.8+0.6i\n');
-    for k = 2:n
+    for k = 1:n
         fprintf(fid, '0.8+0.6i\n');
     end
+    for k = 1:n
+        fprintf(fid, '0.6+0.8i\n');
+    end
     fclose(fid);
-    c = opticstream_read_dispersion(file, n);
-    assert(all(abs(c-(0.8+0.6i)) < 1e-12));
+    [c1,c2] = opticstream_read_dispersion(file, n);
+    assert(all(abs(c1-(0.8+0.6i)) < 1e-12));
+    assert(all(abs(c2-(0.6+0.8i)) < 1e-12));
     rejected = false;
     try
         opticstream_read_dispersion(file, n+1);
