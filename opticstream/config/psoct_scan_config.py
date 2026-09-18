@@ -273,6 +273,16 @@ class PSOCTScanConfigModel(BaseModel):
         description="Base filesystem path for project data. All intermediate and output files should be stored under this path.",
     )
 
+    matlab_processing_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable MATLAB-based tile-batch processing and slice registration for this block. "
+            "When false, these flows skip before processing, archiving within the tile flow, "
+            "or updating processing milestones. Standalone archive/upload and non-MATLAB "
+            "flows are unaffected. Does not stop already-running MATLAB sessions."
+        ),
+    )
+
     mosaics_per_slice: Literal[2, 3] = Field(
         default=2,
         ge=1,

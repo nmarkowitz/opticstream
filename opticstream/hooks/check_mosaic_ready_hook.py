@@ -7,6 +7,7 @@ from typing import Any
 from prefect.logging.loggers import flow_run_logger
 
 from opticstream.config.psoct_scan_config import get_psoct_scan_config
+from opticstream.utils.matlab_settings import MATLAB_DISABLED_STATE
 from opticstream.events.psoct_event_emitters import emit_mosaic_psoct_event
 from opticstream.events.psoct_events import MOSAIC_READY
 from opticstream.flows.psoct.utils import mosaic_context_from_ident
@@ -28,6 +29,8 @@ def check_mosaic_ready_hook(flow: Any, flow_run: Any, state: Any) -> None:
     run name, loads the scan config, computes the expected batch count, and
     checks the mosaic state.
     """
+    if getattr(state, "name", None) == MATLAB_DISABLED_STATE:
+        return
     logger = flow_run_logger(flow_run, flow)
     parsed = parse_flow_run_name_fields(flow_run.name or "")
     missing = missing_required_fields(parsed, _REQUIRED_FIELDS)
