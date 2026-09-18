@@ -56,12 +56,35 @@ Tiles are numbered consecutively within the acquisition starting at `first_image
 (default 1). Batch 1 contains the first `grid_size_y` tiles, batch 2 the next set,
 etc. Total tiles = selected `grid_size_x` * `grid_size_y`.
 
-Within each batch, tiles advance along Y; batches advance along X. Set `traversal`
-to `snake-by-columns` if alternate batches reverse direction. Default is
-`column-by-column`. Individual images are not flipped. Coordinates use actual
+In the block editor, `enface_preview.grid_config` exposes all linc-convert modes:
+
+| grid_type | Valid order values |
+| --- | --- |
+| row-by-row / snake-by-rows | right-down, left-down, right-up, left-up |
+| column-by-column / snake-by-columns | down-right, down-left, up-right, up-left |
+
+The first direction is motion within the first strip; the second is motion between
+strips. `right-down` and `down-right` start at top-left; `left-down` and `down-left`
+at top-right; `right-up` and `up-right` at bottom-left; `left-up` and `up-left` at
+bottom-right. Snake reverses the fast direction on alternate strips.
+
+Default is `column-by-column` / `down-right`. In column-first mode strips advance
+along Y and batches along X; row-first swaps those axes. **Batch size stays
+grid_size_y and batch count stays the selected grid_size_x**, so row-first has
+grid_size_y physical columns and grid_size_x physical rows. This keeps the existing
+consecutive batch convention. Individual images are not flipped. Coordinates use actual
 image dimensions and `acquisition.tile_overlap` (percentage). These are nominal
 grid QC previews, not image-registered/Fiji-optimized mosaics. Inspect alignment
 against a known acquisition before relying on the preview geometry.
+
+Existing saved `enface_preview.traversal` settings migrate automatically to
+`grid_config.grid_type` with `order=down-right` when loaded/resaved by the block
+migration command. Explicit new grid_config values take precedence. Change both
+grid_type and order together to a compatible pair. These settings affect the new
+acquisition-preview flows, not the existing Fiji-registered processing pipeline.
+The new grid_config representation changes preview fingerprints, including after
+legacy migration, so existing previews may be regenerated and sent again. Disable
+Slack temporarily if you only want to inspect the regenerated images locally.
 
 Orientation uses circular blending; set `orientation_units` to degrees (default)
 or radians. AIP/MIP/retardance use ordinary blending. Acquisition originals are

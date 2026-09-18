@@ -7,7 +7,7 @@ from unittest.mock import patch
 import nibabel as nib
 import numpy as np
 
-from opticstream.config.enface_preview import EnfacePreviewConfig
+from opticstream.config.enface_preview import EnfacePreviewConfig, PreviewGridConfig
 from opticstream.config.psoct_scan_config import PSOCTAcquisitionParams
 from opticstream.flows.psoct import acquisition_preview_flow as preview
 from opticstream.cli.oct.watch_enface import EnfacePreviewWatcher
@@ -49,6 +49,43 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "column-by-column"), (8, 0))
         self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "snake-by-columns"), (8, 16))
         self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "snake-by-columns", 2), (0, 16))
+
+    def test_grid_modes_match_linc_convert(self):
+        from linc_convert.modalities.psoct import generate_tile_config as grids
+        generators = {
+            "row-by-row": grids._generate_row_by_row,
+            "column-by-column": grids._generate_column_by_column,
+            "snake-by-rows": grids._generate_snake_by_rows,
+            "snake-by-columns": grids._generate_snake_by_columns,
+        }
+        for mode, generator in generators.items():
+            row_based = mode in {"row-by-row", "snake-by-rows"}
+            orders = ["right-down", "left-down", "right-up", "left-up"] if row_based else ["down-right", "down-left", "up-right", "up-left"]
+            for order in orders:
+                with self.subTest(mode=mode, order=order):
+                    # Non-square acquisition: 3 strips of 2 tiles.
+                    expected = generator(2 if row_based else 3, 3 if row_based else 2,
+                                         10, 20, .2, .2, order, "tile_{tile_number:04d}.nii")
+                    actual = [preview.tile_position(i, 2, (10, 20), .2, mode,
+                              order=order, columns=3) for i in range(6)]
+                    self.assertEqual(actual, [(t["x"], t["y"]) for t in expected])
+                    for batch in range(1, 4):
+                        points = actual[(batch - 1) * 2:batch * 2]
+                        cropped = [(x-min(p[0] for p in points), y-min(p[1] for p in points)) for x, y in points]
+                        strip = [preview.tile_position(i, 2, (10, 20), .2, mode, batch,
+                                 order=order, columns=3) for i in range((batch-1)*2, batch*2)]
+                        self.assertEqual(strip, cropped)
+
+    def test_grid_schema_validation_and_legacy_migration(self):
+        for mode in ("column-by-column", "snake-by-columns"):
+            migrated = EnfacePreviewConfig.model_validate({"traversal": mode})
+            self.assertEqual(migrated.grid_config.grid_type, mode)
+            self.assertEqual(migrated.grid_config.order, "down-right")
+            self.assertNotIn("traversal", migrated.model_dump())
+        with self.assertRaises(ValueError):
+            PreviewGridConfig(grid_type="row-by-row", order="down-right")
+        cfg = EnfacePreviewConfig(grid_config={"grid_type": "snake-by-rows", "order": "left-up"})
+        self.assertEqual(cfg.grid_config.order, "left-up")
 
     @patch("opticstream.cli.oct.watch_enface.slack_notifications_enabled", return_value=False)
     def test_complete_batches_and_acquisition_only(self, slack):

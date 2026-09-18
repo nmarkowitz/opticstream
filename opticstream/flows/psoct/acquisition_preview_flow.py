@@ -94,12 +94,30 @@ def save_progress(directory, progress):
             time.sleep(0.1 * (attempt + 1))
 
 
-def tile_position(index, rows, shape, overlap, traversal, batch_id=None):
-    column, row = divmod(index, rows)
-    if traversal == "snake-by-columns" and column % 2:
-        row = rows - 1 - row
+def tile_position(index, rows, shape, overlap, traversal, batch_id=None, *, order=None, columns=None):
+    """Map acquisition sequence to linc-convert grid coordinates.
+
+    rows is the historical tiles-per-batch setting, not the physical Y extent
+    in row-first mode. columns is the number of batches for the full acquisition.
+    """
+    row_based = traversal in {"row-by-row", "snake-by-rows"}
+    order = order or ("right-down" if row_based else "down-right")
+    from opticstream.config.enface_preview import PreviewGridConfig
+    PreviewGridConfig(grid_type=traversal, order=order)
+    strip, fast = divmod(index, rows)
+    slow = strip
+    count = columns if columns is not None else strip + 1
+    initial, subsequent = order.split("-")
+    reverse_fast = initial in {"left", "up"}
+    if traversal.startswith("snake-") and strip % 2:
+        reverse_fast = not reverse_fast
+    if reverse_fast:
+        fast = rows - 1 - fast
+    if subsequent in {"left", "up"}:
+        slow = count - 1 - slow
     if batch_id is not None:
-        column = 0
+        slow = 0
+    column, row = (fast, slow) if row_based else (slow, fast)
     return round(column * shape[0] * (1 - overlap)), round(row * shape[1] * (1 - overlap))
 
 
@@ -141,8 +159,10 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
                 array = np.rad2deg(array)
             normalized = Path(scratch) / f"tile-{index}.nii"
             nib.save(nib.Nifti1Image(array, np.eye(4)), normalized)
+            grid = config.enface_preview.grid_config
             x, y = tile_position(index, config.acquisition.grid_size_y, shape, overlap,
-                                 config.enface_preview.traversal, batch_id)
+                                 grid.grid_type, batch_id, order=grid.order,
+                                 columns=max(files) // config.acquisition.grid_size_y + 1)
             entries.append({"filepath": str(normalized.resolve()), "x": x, "y": y})
         spec = Path(scratch) / "tiles.yaml"
         spec.write_text(yaml.safe_dump({"metadata": {"scan_resolution": config.acquisition.scan_resolution_3d[:2]}, "tiles": entries}))
