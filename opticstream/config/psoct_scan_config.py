@@ -178,6 +178,14 @@ class PSOCTAcquisitionParams(BaseModel):
 class PSOCTProcessingParams(BaseModel):
     """MATLAB processing parameters that are project-level constants."""
 
+    save_volume_outputs: bool = Field(
+        default=True,
+        description=("Save per-tile dBI, R3D and O3D volume files. Disable for enface-only "
+                     "disk output; intermediate volumes are still computed in memory. "
+                     "Also skips volume validation, mosaic volume stitching and volume uploads. "
+                     "Existing files are not deleted; raw archives and enface workflows are unaffected."),
+    )
+
     disp_comp_file: Path | None = Field(
         default=None,
         description=(

@@ -20,6 +20,17 @@ from psoct_toolbox.opts_models import (
 from opticstream.config.psoct_scan_config import PSOCTScanConfigModel, TileSavingType
 
 
+class VolumeOutputOpts(OutputOpts):
+    """Extra flag consumed by OpticStream's bundled indexed batch wrappers."""
+
+    save_volume_outputs: bool = True
+
+    def to_matlab_struct(self):
+        result = super().to_matlab_struct()
+        result["SaveVolumeOutputs"] = self.save_volume_outputs
+        return result
+
+
 def build_pipeline_opts(
     config: PSOCTScanConfigModel,
     illumination: str = "normal",
@@ -83,6 +94,11 @@ def build_pipeline_opts(
     )
 
     surface = SurfaceOpts(spec=proc.surface_spec)
+
+    output_opts = VolumeOutputOpts(
+        **(output_opts.model_dump(exclude={"save_volume_outputs"}) if output_opts else {}),
+        save_volume_outputs=proc.save_volume_outputs,
+    )
 
     return PipelineOpts(
         spectral=spectral,

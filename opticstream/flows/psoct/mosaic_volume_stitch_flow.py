@@ -281,6 +281,11 @@ def stitch_volume_flow(
         Dictionary mapping modality to output file paths
     """
     logger = get_run_logger()
+    if not config.processing.save_volume_outputs:
+        logger.info("Volume output disabled for this project; skipping volume stitching")
+        with OCT_STATE_SERVICE.open_mosaic(mosaic_ident=mosaic_ident) as mosaic_state:
+            mosaic_state.mark_completed()
+        return {}
     if should_skip_run(
         enter_milestone_stage(
             item_state_view=OCT_STATE_SERVICE.peek_mosaic(mosaic_ident=mosaic_ident),
