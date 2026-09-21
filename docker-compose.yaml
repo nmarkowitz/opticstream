@@ -13,7 +13,7 @@ services:
       - ./db:/var/lib/postgresql
     profiles: ["server"]
     ports:
-      - "1542:5432"
+      - "0.0.0.0:1542:5432"
 
   ### MinIO for flow storage
   minio:
