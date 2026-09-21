@@ -13,7 +13,7 @@ services:
       - ./db:/var/lib/postgresql
     profiles: ["server"]
     ports:
-      - "127.0.0.1:1542:5432"
+      - "1542:5432"
 
   ### MinIO for flow storage
   minio:
@@ -38,7 +38,7 @@ services:
       # Option A: create a .env next to this file with HOST_IP=192.168.x.x (see .env.example)
       # Option B: export HOST_IP=192.168.x.x before `docker compose up`
       # Default 127.0.0.1 is for access only from the Docker host.
-      - PREFECT_UI_URL=http://${HOST_IP:-127.0.0.1}:4200/api
+      - PREFECT_UI_URL=http://${HOST_IP:-127.0.0.1}:4200
       - PREFECT_API_URL=http://${HOST_IP:-127.0.0.1}:4200/api
       - PREFECT_SERVER_API_HOST=0.0.0.0
       - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:postgres@database:5432/prefect
