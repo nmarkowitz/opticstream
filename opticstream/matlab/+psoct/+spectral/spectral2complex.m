@@ -95,11 +95,22 @@ InterpolationParameters = [ ...
     OriginalLineLength1, Start1, ...
     OriginalLineLength2, Start2];
 
-[Wavelengths_l, Wavelengths_r, InterpolatedWavelengths2, Ks] = ...
-    opticstream_interpolationwave(InterpolationParameters); %#ok<ASGLU>
+phaseMode = spectralOpts.interpolationMethod == "phase_calibration";
+Wavelengths_l = []; Wavelengths_r = []; InterpolatedWavelengths2 = [];
+calibration = struct();
+if phaseMode
+    calibration = psoct.spectral.loadPhaseCalibration( ...
+        spectralOpts.interpolationPath, AlineLength, spectralOpts.phaseCalibrationDispersion, ...
+        spectralOpts.dphaseFile, spectralOpts.linPhaseFile, spectralOpts.dspPhaseFile);
+else
+    [Wavelengths_l, Wavelengths_r, InterpolatedWavelengths2, Ks] = ...
+        opticstream_interpolationwave(InterpolationParameters); %#ok<ASGLU>
+end
 
 % Package parameters that are shared across B-lines
 params = struct();
+params.phaseMode = phaseMode;
+params.calibration = calibration;
 params.AlineSize              = AlineSize;
 params.BlineSize              = BlineSize;
 params.AlineLength            = AlineLength;
@@ -117,8 +128,13 @@ params.Wavelengths_r          = Wavelengths_r;
 params.InterpolatedWavelengths = InterpolatedWavelengths2;
 
 % Read the channel-specific corrections from the two halves of one file.
-[phaseCorrection1, phaseCorrection2] = ...
-    opticstream_read_dispersion(dispCompFile, AlineLength);
+if phaseMode && spectralOpts.phaseCalibrationDispersion
+    phaseCorrection1 = calibration.dispersion;
+    phaseCorrection2 = calibration.dispersion;
+else
+    [phaseCorrection1, phaseCorrection2] = ...
+        opticstream_read_dispersion(dispCompFile, AlineLength);
+end
 
 % Replicate along A-line dimension to match interpolated buffer size
 phaseCorrection1 = repmat(phaseCorrection1, 1, Aline);
@@ -162,7 +178,10 @@ for blineIndex = 1:Bline
             fid, blineIndex, params, isRawFormat, HEADER_BYTES);
     else
         WavelengthBuffer1 = double(niftiData(:, 1:Aline, blineIndex));
-        WavelengthBuffer2 = flipud(double(niftiData(:, Aline+1:2*Aline, blineIndex)));
+        WavelengthBuffer2 = double(niftiData(:, Aline+1:2*Aline, blineIndex));
+    end
+    if spectralOpts.flipChannel2Spectra
+        WavelengthBuffer2 = flipud(WavelengthBuffer2);
     end
 
     % Convert spectral buffers into Jones vectors for this B-line
@@ -240,7 +259,7 @@ if numel(data1) ~= params.numSamplesPerBuffer || numel(data2) ~= params.numSampl
 end
 
 WavelengthBuffer1 = reshape(data1, params.AlineLength, []);
-WavelengthBuffer2 = flipud(reshape(data2, params.AlineLength, []));
+WavelengthBuffer2 = reshape(data2, params.AlineLength, []);
 end
 
 function [Jones1, Jones2] = processBlineBuffers( ...
@@ -265,6 +284,13 @@ MeanScan2 = WavelengthBuffer2 - refdata2;
 OriginalBuffer1 = MeanScan1(Start1:OriginalLineLength1 - 1 + Start1, :);
 OriginalBuffer2 = MeanScan2(Start2:OriginalLineLength2 - 1 + Start2, :);
 
+if params.phaseMode
+    % Each column is an A-line. Calibration is shared by both channels.
+    InterpolatedBuffer1 = interp1(params.calibration.dphase, OriginalBuffer1, ...
+        params.calibration.linPhase, 'linear', 'extrap');
+    InterpolatedBuffer2 = interp1(params.calibration.dphase, OriginalBuffer2, ...
+        params.calibration.linPhase, 'linear', 'extrap');
+else
 % Zero padding
 ZeroPaddedBuffer1 = OriginalBuffer1; % PaddingFactor is one; preserve arbitrary sample counts.
 ZeroPaddedBuffer2 = OriginalBuffer2;
@@ -279,6 +305,7 @@ InterpolatedBuffer1 = interp1(params.Wavelengths_l, ZeroPaddedBuffer1, ...
     params.InterpolatedWavelengths, 'linear', 'extrap');
 InterpolatedBuffer2 = interp1(params.Wavelengths_r, ZeroPaddedBuffer2, ...
     params.InterpolatedWavelengths, 'linear', 'extrap');
+end
 
 % Remove DC component using median across A-lines
 InterpolatedBuffer1 = InterpolatedBuffer1 - median(InterpolatedBuffer1, 2);

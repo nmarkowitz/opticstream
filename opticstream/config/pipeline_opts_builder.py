@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from typing import Optional
+from pydantic import Field
 
 from prefect import get_run_logger
 from psoct_toolbox.opts_models import (
@@ -29,6 +30,18 @@ class VolumeOutputOpts(OutputOpts):
         result = super().to_matlab_struct()
         result["SaveVolumeOutputs"] = self.save_volume_outputs
         return result
+
+
+class CalibratedSpectralOpts(SpectralOpts):
+    """OpticStream extensions serialized by the existing toolbox bridge."""
+
+    interpolation_method: str = Field(default="wavelength", alias="interpolationMethod")
+    interpolation_path: Optional[str] = Field(default=None, alias="interpolationPath")
+    dphase_file: Optional[str] = Field(default=None, alias="dphaseFile")
+    lin_phase_file: Optional[str] = Field(default=None, alias="linPhaseFile")
+    dsp_phase_file: Optional[str] = Field(default=None, alias="dspPhaseFile")
+    phase_calibration_dispersion: bool = Field(default=False, alias="phaseCalibrationDispersion")
+    flip_channel2_spectra: bool = Field(default=True, alias="flipChannel2Spectra")
 
 
 def build_pipeline_opts(
@@ -57,11 +70,26 @@ def build_pipeline_opts(
     aline_size = (
         acq.tile_size_x_normal if illumination == "normal" else acq.tile_size_x_tilted
     )
-    spectral = SpectralOpts(
-        disp_comp_file=str(proc.disp_comp_file),
+    if proc.interpolation_method == "phase_calibration" and proc.interpolation_path is None:
+        if proc.dphase_file is None or proc.lin_phase_file is None:
+            raise ValueError("phase_calibration requires dphase_file and lin_phase_file, or interpolation_path")
+        if proc.phase_calibration_dispersion and proc.dsp_phase_file is None:
+            raise ValueError("phase_calibration_dispersion requires dsp_phase_file or interpolation_path")
+    if proc.phase_calibration_dispersion and proc.interpolation_method != "phase_calibration":
+        raise ValueError("phase_calibration_dispersion requires phase_calibration interpolation")
+    spectral = CalibratedSpectralOpts(
+        disp_comp_file=str(proc.disp_comp_file) if proc.disp_comp_file is not None else None,
         aline_size=aline_size,
         bline_size=acq.tile_size_y,
         is_raw_format=(acq.tile_saving_type == TileSavingType.SPECTRAL_12bit),
+        interpolation_method=proc.interpolation_method,
+        interpolation_path=str(proc.interpolation_path) if proc.interpolation_path is not None else None,
+        dphase_file=str(proc.dphase_file) if proc.dphase_file is not None else None,
+        lin_phase_file=str(proc.lin_phase_file) if proc.lin_phase_file is not None else None,
+        dsp_phase_file=str(proc.dsp_phase_file) if proc.dsp_phase_file is not None else None,
+        phase_calibration_dispersion=proc.phase_calibration_dispersion,
+        flip_channel2_spectra=(proc.flip_channel2_spectra if proc.flip_channel2_spectra is not None
+                               else proc.interpolation_method == "wavelength"),
     )
 
     compute = EnfaceComputeFlags(

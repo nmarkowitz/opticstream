@@ -178,6 +178,28 @@ class PSOCTAcquisitionParams(BaseModel):
 class PSOCTProcessingParams(BaseModel):
     """MATLAB processing parameters that are project-level constants."""
 
+    interpolation_method: Literal["wavelength", "phase_calibration"] = Field(
+        default="wavelength", description="wavelength preserves the existing wave-pixel calibration. phase_calibration interpolates from dphase onto linPhase loaded from interpolation_path.",
+    )
+    interpolation_path: Path | None = Field(
+        default=None, description="Calibration directory containing dphase.mat (variable dphase) and linPhase.mat (variable linPhase). Both must be real, finite vectors matching the spectral sample count; linPhase must be uniformly spaced.",
+    )
+    dphase_file: Path | None = Field(
+        default=None, description="Path to the .mat file containing variable dphase. Overrides interpolation_path/dphase.mat. Real finite vector matching the spectral sample count.",
+    )
+    lin_phase_file: Path | None = Field(
+        default=None, description="Path to the .mat file containing variable linPhase. Overrides interpolation_path/linPhase.mat. Uniformly spaced real finite vector matching the spectral sample count.",
+    )
+    dsp_phase_file: Path | None = Field(
+        default=None, description="Path to the .mat file containing variable dspPhase (radians). Overrides interpolation_path/dspPhase.mat. Used only when phase_calibration_dispersion is true; vector length must match the spectral sample count.",
+    )
+    phase_calibration_dispersion: bool = Field(
+        default=False, description="In phase_calibration mode, use dspPhase.mat (variable dspPhase, radians) from interpolation_path for both channels instead of disp_comp_file. False preserves the existing channel-specific dispersion correction.",
+    )
+    flip_channel2_spectra: bool | None = Field(
+        default=None, description="Reverse channel 2 along the spectral axis before interpolation. null selects true for wavelength mode (legacy behavior), false for phase_calibration. Calibration vectors must describe the selected sample ordering.",
+    )
+
     save_volume_outputs: bool = Field(
         default=True,
         description=("Save per-tile dBI, R3D and O3D volume files. Disable for enface-only "
