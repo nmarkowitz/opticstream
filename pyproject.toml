@@ -53,7 +53,7 @@ include = ["opticstream*"]
 exclude = ["notebooks*"]
 
 [tool.setuptools.package-data]
-opticstream = ["matlab/*.m", "matlab/+psoct/+spectral/*.m", "matlab/*.md"]
+opticstream = ["matlab/*.m", "matlab/+psoct/+spectral/*.m", "matlab/+psoct/+internal/+opts/*.m", "matlab/+psoct/+file/*.m", "matlab/+psoct/+file/+internal/*.m", "matlab/*.md"]
 
 [tool.pytest.ini_options]
 addopts = '-m "not integration"'

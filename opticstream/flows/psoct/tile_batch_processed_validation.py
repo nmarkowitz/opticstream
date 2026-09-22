@@ -50,7 +50,7 @@ def expected_processed_nifti_suffixes(config: PSOCTScanConfigModel) -> tuple[str
     return tuple(
         dict.fromkeys(
             m.value
-            for modalities in (config.volume_modalities, config.enface_modalities)
+            for modalities in (config.volume_modalities if config.processing.save_volume_outputs else [], config.enface_modalities)
             for m in modalities
         )
     )
@@ -73,7 +73,7 @@ def validate_processed_batch_outputs(
     processed_dir = processed_dir.resolve()
 
     grouped_suffixes = {
-        "volume": tuple(dict.fromkeys(m.value for m in config.volume_modalities)),
+        "volume": tuple(dict.fromkeys(m.value for m in config.volume_modalities)) if config.processing.save_volume_outputs else (),
         "enface": tuple(dict.fromkeys(m.value for m in config.enface_modalities)),
     }
 

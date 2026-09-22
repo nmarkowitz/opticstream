@@ -13,6 +13,7 @@ from cyclopts import App
 
 #DEFAULT_FIJI_PATH = Path("/autofs/cluster/octdata2/users/Hui/Fiji.app/ImageJ-linux64")
 DEFAULT_FIJI_PATH = Path("/usr/pubsw/packages/ImageJ/current/ImageJ-linux64")
+#DEFAULT_FIJI_PATH = Path(r"C:\Users\Ayman\Downloads\fiji-latest-win64-jdk\Fiji\fiji-windows-x64.exe")
 
 app = App(name="fiji")
 

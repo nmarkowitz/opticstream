@@ -24,6 +24,7 @@ from opticstream.state.state_guards import force_rerun_from_payload
 from opticstream.tasks.dandi_upload import upload_to_dandi_batch
 from opticstream.hooks.slack_notification_hook import slack_notification_hook
 from opticstream.utils.upload_settings import upload_flow_enabled
+from opticstream.utils.volume_settings import volume_output_upload_enabled
 
 
 @flow(
@@ -31,6 +32,7 @@ from opticstream.utils.upload_settings import upload_flow_enabled
     on_completion=[publish_oct_mosaic_hook, publish_oct_project_hook],
     on_failure=[slack_notification_hook],
 )
+@volume_output_upload_enabled
 @upload_flow_enabled
 @oct_mosaic_processing_milestone(
     field_name="volume_uploaded", success_event=MOSAIC_VOLUME_UPLOADED
