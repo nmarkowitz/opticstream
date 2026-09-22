@@ -11,7 +11,8 @@ from pathlib import Path
 
 from cyclopts import App
 
-DEFAULT_FIJI_PATH = Path("/autofs/cluster/octdata2/users/Hui/Fiji.app/ImageJ-linux64")
+#DEFAULT_FIJI_PATH = Path("/autofs/cluster/octdata2/users/Hui/Fiji.app/ImageJ-linux64")
+DEFAULT_FIJI_PATH = Path("/usr/pubsw/packages/ImageJ/current/ImageJ-linux64")
 
 app = App(name="fiji")
 
