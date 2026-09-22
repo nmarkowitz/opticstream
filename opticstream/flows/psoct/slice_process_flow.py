@@ -23,6 +23,7 @@ from opticstream.events import SLICE_READY, SLICE_REGISTERED, get_event_trigger
 from opticstream.events.psoct_event_emitters import emit_slice_psoct_event
 from opticstream.state.oct_project_state import OCTSliceId, OCT_STATE_SERVICE
 from opticstream.utils.matlab_execution import run_matlab_batch_command_or_cli
+from opticstream.utils.matlab_settings import matlab_flow_enabled
 from opticstream.flows.psoct.utils import get_slice_paths
 
 
@@ -164,6 +165,7 @@ def thruplane_from_files_task(
     flow_run_name="{project_name}-slice-{slice_id}-register",
     on_completion=[publish_oct_project_hook],
 )
+@matlab_flow_enabled
 def register_slice_flow(
     project_name: str,
     project_base_path: str,

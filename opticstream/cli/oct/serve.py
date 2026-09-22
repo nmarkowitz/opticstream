@@ -5,6 +5,7 @@ from prefect import serve
 
 from opticstream.cli.oct import oct_cli
 from opticstream.utils.runtime_paths import chdir_to_opticstream_install_root
+from opticstream.flows.psoct.acquisition_preview_flow import to_deployment as acquisition_preview_deployments
 
 from opticstream.flows.psoct.mosaic_enface_qc_flow import (
     to_deployment as mosaic_enface_qc_deployments,
@@ -136,6 +137,9 @@ def build_deployments(
         )
     )
 
+    deployments.extend(acquisition_preview_deployments(
+        deployment_name=deployment_name, extra_tags=COMMON_TAGS,
+    ))
     return deployments
 
 

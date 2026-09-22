@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from niizarr import ZarrConfig
 import psoct_toolbox
 from opticstream.config.utils import with_positions
+from opticstream.config.enface_preview import EnfacePreviewConfig
 from opticstream.utils.naming_convention import normalize_project_name
     
 
@@ -303,6 +304,16 @@ class PSOCTScanConfigModel(BaseModel):
         description="Base filesystem path for project data. All intermediate and output files should be stored under this path.",
     )
 
+    matlab_processing_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable MATLAB-based tile-batch processing and slice registration for this block. "
+            "When false, these flows skip before processing, archiving within the tile flow, "
+            "or updating processing milestones. Standalone archive/upload and non-MATLAB "
+            "flows are unaffected. Does not stop already-running MATLAB sessions."
+        ),
+    )
+
     mosaics_per_slice: Literal[2, 3] = Field(
         default=2,
         ge=1,
@@ -316,6 +327,11 @@ class PSOCTScanConfigModel(BaseModel):
     processing: PSOCTProcessingParams = Field(
         default_factory=PSOCTProcessingParams,
         description="Project-level MATLAB processing options",
+    )
+
+    enface_preview: EnfacePreviewConfig = Field(
+        default_factory=EnfacePreviewConfig,
+        description="Acquisition-produced AIP/MIP/orientation/retardance previews for watch-enface; independent of MATLAB and spectral processing state.",
     )
 
     mask_threshold_normal: float = Field(

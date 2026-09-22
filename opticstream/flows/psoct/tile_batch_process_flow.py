@@ -37,6 +37,7 @@ from opticstream.state.state_guards import (
     should_skip_run,
 )
 from opticstream.utils.matlab_execution import run_matlab_batch_command_or_cli
+from opticstream.utils.matlab_settings import matlab_flow_enabled
 
 from psoct_toolbox.matlab_bridge import (
     build_complex2processed_batch_indexed_command,
@@ -200,6 +201,7 @@ def split_channel_data(
     on_completion=[publish_oct_mosaic_hook, publish_oct_project_hook, check_mosaic_ready_hook],
     on_failure=[slack_notification_hook],
 )
+@matlab_flow_enabled
 @oct_batch_processing_milestone(
     field_name="enface_processed", success_event=BATCH_PROCESSED
 )
