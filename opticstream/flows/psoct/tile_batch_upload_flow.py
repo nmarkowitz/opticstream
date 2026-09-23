@@ -77,11 +77,11 @@ def to_deployment(
     """
     manual = upload_to_dandi_tile_batch.to_deployment(
         name=deployment_name,
-        tags=["tile-batch", "upload-to-linc", *list(extra_tags)],
+        tags=["tile-batch", "upload-to-dandi", *list(extra_tags)],
     )
     event = upload_to_dandi_batch_event_flow.to_deployment(
         name=deployment_name,
-        tags=["event-driven", "tile-batch", "upload-to-linc", *list(extra_tags)],
+        tags=["event-driven", "tile-batch", "upload-to-dandi", *list(extra_tags)],
         triggers=[get_event_trigger(BATCH_ARCHIVED, project_name=project_name)],
     )
     return [manual, event]

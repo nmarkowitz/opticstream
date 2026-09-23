@@ -170,8 +170,17 @@ def upload_to_dandi_batch(
     dandi_api_key: Secret | None = None,
 ) -> None:
     """
-    Upload multiple files to DANDI (or optionally to the LINC instance).
+    Upload multiple files to DANDI.
+
+    LINC is deprecated: requesting it raises instead of uploading there or
+    silently switching instances (dandiset ids differ between the two).
     """
+    if dandi_instance == "linc":
+        raise ValueError(
+            "LINC uploads are deprecated; upload to DANDI instead. Set "
+            "dandi_instance='dandi' (e.g. in the project's scan config block) "
+            "and point dandiset_path at the DANDI dandiset."
+        )
     logger = get_run_logger()
 
     command, working_dir, _ = build_dandi_upload_command(
@@ -214,7 +223,7 @@ def upload_to_dandi_batch(
 def upload_to_dandi(
     file_path: str,
     *,
-    dandi_instance: DANDI_INSTANCE = "linc",
+    dandi_instance: DANDI_INSTANCE = "dandi",
     dandi_bin: str = "dandi",
     realpath: bool = True,
     max_jobs: str = "10:10",

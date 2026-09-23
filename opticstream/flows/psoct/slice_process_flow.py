@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, Sequence
 from prefect import flow, task
 from prefect.logging import get_run_logger
 
-from psoct_toolbox.matlab_bridge import build_thruplane_from_files_command
+from psoct_toolbox.matlab_bridge import _matlab_literal
 
 from opticstream.hooks.publish_hooks import publish_oct_project_hook
 from opticstream.events import SLICE_READY, SLICE_REGISTERED, get_event_trigger
@@ -25,6 +25,56 @@ from opticstream.state.oct_project_state import OCTSliceId, OCT_STATE_SERVICE
 from opticstream.utils.matlab_execution import run_matlab_batch_command_or_cli
 from opticstream.utils.matlab_settings import matlab_flow_enabled
 from opticstream.flows.psoct.utils import get_slice_paths
+
+
+# Output filenames written by thruplane registration, keyed by the
+# outputOpts.Paths field names of psoct.registration.thruplane.
+THRUPLANE_OUTPUT_FILES: Dict[str, tuple[str, str]] = {
+    "data": ("dataMat", "data_data.mat"),
+    "inplane_tiff": ("inplaneTiff", "data_inplane.tiff"),
+    "inplane_jpg": ("inplaneJpg", "data_inplane.jpg"),
+    "alpha_tiff": ("alphaTiff", "data_alpha.tiff"),
+    "alpha_jpg": ("alphaJpg", "data_alpha.jpg"),
+    "axis_nii": ("axisNiiNorm", "3daxis.nii"),
+    "axis_jpg": ("axisJpg", "3daxis.jpg"),
+}
+
+
+def build_thruplane_command(
+    fixed_ori_path: str,
+    moving_ori_path: str,
+    fixed_biref_path: str,
+    moving_biref_path: str,
+    output_dir: Path,
+    gamma: float,
+) -> str:
+    """
+    Build a ``psoct.registration.thruplane(...)`` MATLAB command.
+
+    psoct_toolbox's ``build_thruplane_from_files_command`` targets
+    ``thruplane_from_files``, which is not callable unqualified and depends on
+    a registration backend missing from the pinned toolbox.
+    """
+    paths = {
+        field: str(output_dir / filename)
+        for field, filename in THRUPLANE_OUTPUT_FILES.values()
+    }
+    args = ", ".join(
+        [
+            _matlab_literal(fixed_ori_path),
+            _matlab_literal(moving_ori_path),
+            _matlab_literal(fixed_biref_path),
+            _matlab_literal(moving_biref_path),
+            "''",  # fixed_mask
+            "''",  # moving_mask
+            "55",  # fixed_mask_threshold (unused without a mask)
+            "55",  # moving_mask_threshold (unused without a mask)
+            "[]",  # crop_rect
+            _matlab_literal(float(gamma)),
+            _matlab_literal({"Paths": paths}),
+        ]
+    )
+    return f"psoct.registration.thruplane({args})"
 
 
 @task
@@ -126,13 +176,13 @@ def thruplane_from_files_task(
     )
 
     try:
-        cmd = build_thruplane_from_files_command(
+        cmd = build_thruplane_command(
             fixed_ori_abs,
             moving_ori_abs,
             fixed_biref_abs,
             moving_biref_abs,
-            output_dir=output_dir_abs,
-            gamma=float(gamma),
+            output_dir=Path(output_dir_abs),
+            gamma=gamma,
         )
         run_matlab_batch_command_or_cli(
             cmd,
@@ -144,13 +194,8 @@ def thruplane_from_files_task(
 
     # Collect output file paths
     outputs = {
-        "data": output_path / "data_data.mat",
-        "inplane_tiff": output_path / "data_inplane.tiff",
-        "inplane_jpg": output_path / "data_inplane.jpg",
-        "alpha_tiff": output_path / "data_alpha.tiff",
-        "alpha_jpg": output_path / "data_alpha.jpg",
-        "axis_nii": output_path / "3daxis.nii",
-        "axis_jpg": output_path / "3daxis.jpg",
+        key: output_path / filename
+        for key, (_, filename) in THRUPLANE_OUTPUT_FILES.items()
     }
 
     # Verify outputs exist

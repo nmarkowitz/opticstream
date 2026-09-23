@@ -35,7 +35,7 @@ def upload_mosaic_enface_to_dandi_flow(
     mosaic_ident: OCTMosaicId,
     enface_outputs: Dict[str, str],
     *,
-    dandi_instance: str = "linc",
+    dandi_instance: str = "dandi",
     dandi_api_key: Secret | None = None,
     force_rerun: bool = False,
 ) -> None:

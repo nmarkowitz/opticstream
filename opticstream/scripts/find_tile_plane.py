@@ -41,6 +41,11 @@ from cyclopts import App
 from scipy.optimize import least_squares, minimize
 
 try:
+    import matplotlib
+
+    # Plots are only saved to files. A GUI backend (picked when DISPLAY is set)
+    # aborts the process when its Tk objects are collected from worker threads.
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     HAS_MATPLOTLIB = True
 except ImportError:

@@ -218,7 +218,8 @@ def find_focus_plane_task(
     find_tile_plane.main(
         yaml_path=str(filtered_tile_info_path),
         output=str(focus_plane_path_slice),
-        base_dir=str(slice_focus_dir),
+        # Surface maps live in the processed dir recorded in the YAML metadata.
+        base_dir=None,
         subsample=1,
         avg_signal_threshold=signal_threshold,
         plot=str(slice_focus_dir / f"plane_{config_illumination}.png"),
@@ -410,8 +411,9 @@ def stitch_volume_flow(
     errors = []
     for modality, future in volume_futures.items():
         future.wait()
-        if future.exception():
-            errors.append(future.exception())
+        # Prefect futures expose a state, not concurrent.futures' exception().
+        if not future.state.is_completed():
+            errors.append(f"{modality}: {future.state.message}")
 
     if errors:
         raise RuntimeError(f"Errors occurred during volume stitching: {errors}")

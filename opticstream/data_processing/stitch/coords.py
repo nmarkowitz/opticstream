@@ -179,7 +179,41 @@ class Grid:
             print(line)
             print("-" * total_width)
 
-    def compute_registered_offset(self, signal_threshold: float = 55.0):
+    @staticmethod
+    def _validated_drift(
+        drifts: List[Tuple[float, float]],
+        ideal: Tuple[float, float],
+        label: str,
+        max_deviation: float,
+    ) -> Tuple[float, float]:
+        """
+        Median registered drift, or the ideal grid step if registration is unusable.
+
+        Falls back when no reliable neighbor pairs exist, or when the median
+        deviates from the ideal step by more than ``max_deviation`` times the
+        ideal step length (e.g. Fiji collapsing tiles onto the same position).
+        """
+        ideal_len = float(np.hypot(*ideal))
+        if not drifts:
+            print(
+                f"WARNING: no reliable {label} tile pairs; "
+                f"falling back to ideal {label} step {ideal}"
+            )
+            return ideal
+        drift = tuple(np.median(np.array(drifts), axis=0).tolist())
+        deviation = float(np.hypot(drift[0] - ideal[0], drift[1] - ideal[1]))
+        if ideal_len > 0 and deviation > max_deviation * ideal_len:
+            print(
+                f"WARNING: registered {label} drift {drift} deviates from ideal "
+                f"step {ideal} by {deviation:.1f} px (> {max_deviation:.0%} of step); "
+                f"registration likely failed, falling back to ideal step"
+            )
+            return ideal
+        return drift
+
+    def compute_registered_offset(
+        self, signal_threshold: float = 55.0, max_drift_deviation: float = 0.5
+    ):
         horizontal_drifts = []
         vertical_drifts = []
 
@@ -209,16 +243,18 @@ class Grid:
                     dy = b.stitched_coord[1] - a.stitched_coord[1]
                     vertical_drifts.append((dx, dy))
 
-        horizontal_drift = (0.0, 0.0)
-        vertical_drift = (0.0, 0.0)
-        if horizontal_drifts:
-            horizontal_drift = tuple(
-                np.median(np.array(horizontal_drifts), axis=0).tolist()
-            )
-        if vertical_drifts:
-            vertical_drift = tuple(
-                np.median(np.array(vertical_drifts), axis=0).tolist()
-            )
+        ideal_horizontal = (
+            (self.x_coords[1] - self.x_coords[0], 0.0) if self.num_cols > 1 else (0.0, 0.0)
+        )
+        ideal_vertical = (
+            (0.0, self.y_coords[1] - self.y_coords[0]) if self.num_rows > 1 else (0.0, 0.0)
+        )
+        horizontal_drift = self._validated_drift(
+            horizontal_drifts, ideal_horizontal, "horizontal", max_drift_deviation
+        )
+        vertical_drift = self._validated_drift(
+            vertical_drifts, ideal_vertical, "vertical", max_drift_deviation
+        )
 
         print("\nComputed drifts:")
         print(

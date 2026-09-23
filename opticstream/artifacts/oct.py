@@ -158,7 +158,7 @@ Mosaic ID: {mosaic_id}
 Last Updated: {timestamp_str()}
 
 The table lists each batch (rows) with processing state; flags use ✅ / ❌.
-Batch uploaded is per-batch LINC upload. Mosaic-level upload/stitch status is on the all-mosaics artifact.
+Batch uploaded is per-batch DANDI upload. Mosaic-level upload/stitch status is on the all-mosaics artifact.
 
 Status: {status_text}
 

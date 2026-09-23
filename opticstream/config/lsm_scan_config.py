@@ -84,7 +84,9 @@ class LSMScanConfigModel(BaseModel):
         description="Path to the DANDI CLI binary, useful for installation in a separate conda/venv environment",
     )
     dandi_instance: str = Field(
-        default="linc", min_length=1, description="DANDI instance to use for upload"
+        default="dandi",
+        min_length=1,
+        description="DANDI instance to use for upload (LINC is deprecated)",
     )
     dandiset_path: str = Field(
         default="linc://000052/", description="Path to the DANDI set to use for upload"

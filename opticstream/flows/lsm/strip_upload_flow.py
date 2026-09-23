@@ -37,7 +37,7 @@ from opticstream.utils.upload_settings import upload_flow_enabled
 def upload_strip_to_dandi_flow(
     strip_ident: LSMStripId,
     output_path: Path,
-    dandi_instance: str = "linc",
+    dandi_instance: str = "dandi",
     dandi_bin: str = "dandi",
     dandi_api_key: Secret | None = None,
     force_rerun: bool = False,
