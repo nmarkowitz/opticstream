@@ -135,7 +135,7 @@ def deploy(
 
     stitch_volume_event_flow.from_source(
         source=Path(__file__).parent.parent.parent / "flows",
-        entrypoint="volume_stitching_flow.py:stitch_volume_event_flow",
+        entrypoint="psoct/mosaic_volume_stitch_flow.py:stitch_volume_event_flow",
     ).deploy(
         name=deployment_name,
         work_pool_name=work_pool_name,

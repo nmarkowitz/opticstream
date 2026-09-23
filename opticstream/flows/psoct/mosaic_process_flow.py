@@ -281,8 +281,8 @@ def stitch_enface_modalities(
     template_path: Path,
     processed_path: Path,
     stitched_path: Path,
-    mask_path: Path,
     scan_resolution_2d: List[float],
+	mask_path: Optional[Path] = None,
 ) -> Dict[str, Path]:
     """
     Subflow to stitch all 2D enface modalities.

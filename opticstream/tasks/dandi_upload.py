@@ -96,6 +96,7 @@ def _upload_dandi_api(
     file_list: List[str],
     *,
     max_jobs: str,
+    dandi_api_key: Secret | None = None,
 ) -> None:
     """Upload DANDI assets through the API, including generic NIfTI files.
 
@@ -123,15 +124,39 @@ def _upload_dandi_api(
                     metadata_paths.append(metadata)
                 break
 
-    upload(
-        paths=[*paths, *metadata_paths],
-        existing=UploadExisting.OVERWRITE,
-        validation=UploadValidation.SKIP,
+    # The Python DANDI API authenticates from DANDI_API_KEY.  Unlike the
+    # subprocess path below, it does not receive the environment assembled by
+    # _build_dandi_upload_env, so set the key explicitly for this call.  Keep
+    # the change scoped to the upload and restore the worker environment after
+    # the call completes.
+    env = _build_dandi_upload_env(
         dandi_instance="dandi",
-        allow_any_path=True,
-        jobs=jobs,
-        jobs_per_file=jobs_per_file,
+        dandi_api_key=dandi_api_key,
     )
+    api_key = env["DANDI_API_KEY"]
+    if not api_key:
+        raise RuntimeError(
+            "No DANDI API key is configured. Set the project's dandi_api_key "
+            "Secret or create the 'dandi-api-key' Secret block."
+        )
+
+    previous_api_key = os.environ.get("DANDI_API_KEY")
+    os.environ["DANDI_API_KEY"] = api_key
+    try:
+        upload(
+            paths=[*paths, *metadata_paths],
+            existing=UploadExisting.OVERWRITE,
+            validation=UploadValidation.SKIP,
+            dandi_instance="dandi",
+            allow_any_path=True,
+            jobs=jobs,
+            jobs_per_file=jobs_per_file,
+        )
+    finally:
+        if previous_api_key is None:
+            os.environ.pop("DANDI_API_KEY", None)
+        else:
+            os.environ["DANDI_API_KEY"] = previous_api_key
 
 
 @task(tags=["dandi-upload"], retries=1)
@@ -167,7 +192,11 @@ def upload_to_dandi_batch(
     logger.info(command)
 
     if dandi_instance == "dandi":
-        _upload_dandi_api(file_list, max_jobs=max_jobs)
+        _upload_dandi_api(
+            file_list,
+            max_jobs=max_jobs,
+            dandi_api_key=dandi_api_key,
+        )
         logger.info("DANDI batch upload completed")
         return
 

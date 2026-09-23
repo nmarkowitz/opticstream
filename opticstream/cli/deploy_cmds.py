@@ -51,7 +51,7 @@ FLOW_DEPLOYMENTS: Dict[str, FlowDeploymentSpec] = {
         description="Event-driven mosaic processing flow (MOSAIC_READY -> process_mosaic_flow).",
     ),
     "volume-stitching": FlowDeploymentSpec(
-        module_path="opticstream.flows.volume_stitching_flow",
+        module_path="opticstream.flows.psoct.mosaic_volume_stitch_flow",
         deployment_names=("stitch_volume_event_flow_deployment",),
         description="Event-driven 3D volume stitching flow (MOSAIC_ENFACE_STITCHED -> stitch_volume_flow).",
     ),
