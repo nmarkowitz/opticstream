@@ -8,9 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class PreviewGridConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-    grid_type: Literal["row-by-row", "column-by-column", "snake-by-rows", "snake-by-columns"] = Field(
+    grid_type: Literal["snake-by-columns", "row-by-row", "column-by-column", "snake-by-rows"] = Field(
         default="column-by-column", description="Acquisition traversal. Snake reverses the fast direction on alternate strips; individual images are not flipped. Each strip still contains grid_size_y consecutive tiles.")
-    order: Literal["right-down", "left-down", "right-up", "left-up", "down-right", "down-left", "up-right", "up-left"] = Field(
+    order: Literal["up-right", "right-down", "left-down", "right-up", "left-up", "down-right", "down-left", "up-left"] = Field(
         default="down-right", description="Rows: right-down (top-left), left-down (top-right), right-up (bottom-left), left-up (bottom-right). Columns: down-right (top-left), down-left (top-right), up-right (bottom-left), up-left (bottom-right). First word is initial within-strip movement; second is movement between strips. Must match grid_type.")
 
     @model_validator(mode="after")
@@ -27,7 +27,7 @@ class EnfacePreviewConfig(BaseModel):
 
     batch_enabled: bool = Field(default=True, description="Stitch each complete grid_size_y-tile batch and send previews to Slack when watch-enface runs.")
     acquisition_enabled: bool = Field(default=True, description="Also stitch the complete acquisition/mosaic and send previews to Slack.")
-    aip_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_aip.nii", description="Exact filename format, not a glob. Required {image}; optional {slice}, {mosaic}, {acquisition}, {project}. Supports :04d zero-padding. Example: slice-{slice}_acq-{acquisition}_aip_{image:04d}.nii")
+    aip_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_aip.nii", description="Filename format, not a glob. Required {image}; optional {slice}, {mosaic}, {acquisition}, {project}. A plain {image} matches the number with any zero padding (1, 01, 0001), like filename_pattern; {image:04d} renders exactly. Example: slice-{slice}_acq-{acquisition}_aip_{image}.nii")
     mip_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_mip.nii", description="MIP filename format; same placeholders as aip_pattern. Set the actual suffix, including .nii.gz if used.")
     ori_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_ori.nii", description="Orientation filename format. Orientation is blended with circular averaging.")
     ret_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_ret.nii", description="Retardance filename format; no hardcoded modality suffix.")

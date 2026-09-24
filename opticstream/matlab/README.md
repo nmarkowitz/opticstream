@@ -23,3 +23,9 @@ No coefficients are silently truncated, padded or recalibrated.
 The legacy wavelength calibration and channel-2 reversal remain in use;
 support for additional lengths does not validate that calibration for a
 different scanner. Output depth is floor(samples/2)-24.
+
+Orientation helpers (top level, unpackaged, from chaos_scientific_report_scripts):
+- angle2tensor.m: orientation angle in degrees -> 4-component orientation tensor.
+- tensor2angle.m: orientation tensor -> angle in radians.
+psoct.registration.thruplane_registration calls both, unqualified, to warp
+orientation maps; the toolbox does not ship them.

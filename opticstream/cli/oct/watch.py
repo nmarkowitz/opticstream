@@ -23,7 +23,7 @@ from opticstream.flows.psoct.utils import (
     mosaic_position_in_slice,
     slice_from_mosaic,
 )
-from opticstream.state.oct_project_state import OCT_STATE_SERVICE
+from opticstream.state.oct_project_state import OCT_STATE_SERVICE, OCTMosaicId
 from opticstream.utils.filename_utils import (
     extract_processed_index_from_filename,
     extract_spectral_index_from_filename,
@@ -658,6 +658,70 @@ class OCTWatcherService:
         return 1
 
 
+def build_watch_previews(
+    scan_config: PSOCTScanConfigModel,
+    *,
+    project_name: str,
+    folder_path: Path,
+    fixed_slice_id: int | None,
+    fixed_mosaic_slot: int | None,
+    acquisition: str | None,
+    slice_offset: int,
+    stability_seconds: int,
+    poll_interval: int,
+) -> PollingStableWatcher | None:
+    """Enface preview watcher for the folder's slice/mosaic, or None when not applicable."""
+    preview = scan_config.enface_preview
+    if not (preview.batch_enabled or preview.acquisition_enabled):
+        logger.info("Enface previews disabled in the block (batch_enabled/acquisition_enabled)")
+        return None
+    if fixed_slice_id is None or fixed_mosaic_slot is None:
+        logger.info(
+            "Enface previews need the folder's slice and mosaic; pass --slice with "
+            "--acquisition, or --mosaic, to enable them"
+        )
+        return None
+    if acquisition is None:
+        labels = [
+            label
+            for label, slot in scan_config.acquisition.acquisition_mosaic_map.items()
+            if slot == fixed_mosaic_slot
+        ]
+        if not labels:
+            logger.warning(
+                "No acquisition_mosaic_map label for mosaic slot %s; enface previews off",
+                fixed_mosaic_slot,
+            )
+            return None
+        acquisition = labels[0]
+    source_mosaic_id = (fixed_slice_id - 1) * scan_config.mosaics_per_slice + fixed_mosaic_slot
+    logical_slice_id, logical_mosaic_id = logical_mosaic_from_source_mosaic(
+        source_mosaic_id,
+        mosaics_per_slice=scan_config.mosaics_per_slice,
+        slice_offset=slice_offset,
+    )
+    ident = OCTMosaicId(
+        project_name=project_name, slice_id=logical_slice_id, mosaic_id=logical_mosaic_id
+    )
+    # Imported here: watch_enface imports this module.
+    from opticstream.cli.oct.watch_enface import build_preview_watcher
+
+    logger.info(
+        "Enface previews on for slice=%s mosaic=%s acquisition=%s",
+        logical_slice_id,
+        logical_mosaic_id,
+        acquisition,
+    )
+    return build_preview_watcher(
+        scan_config,
+        ident,
+        folder_path,
+        acquisition,
+        stability_seconds=stability_seconds,
+        poll_interval=poll_interval,
+    )
+
+
 def watch_oct(
     *,
     project_name: str,
@@ -675,6 +739,7 @@ def watch_oct(
     min_complex_file_size_bytes: int = 1,
     fixed_slice_id: int | None = None,
     fixed_mosaic_slot: int | None = None,
+    companions: tuple[PollingStableWatcher, ...] = (),
 ) -> None:
     service = OCTWatcherService(
         project_name=project_name,
@@ -701,7 +766,7 @@ def watch_oct(
         stability_seconds=stability_seconds,
         running_message=f"OCT polling watcher running ({'direct' if direct else 'event'} mode)",
     )
-    watcher.run()
+    watcher.run(*companions)
 
 
 @oct_cli.command
@@ -720,6 +785,7 @@ def watch(
     slice: int | None = None,
     acquisition: str | None = None,
     mosaic: int | None = None,
+    previews: bool = True,
     verbose: bool = False,
 ) -> None:
     """
@@ -742,6 +808,10 @@ def watch(
     and filter files whose names already contain them. --acquisition is a label
     from acquisition.acquisition_mosaic_map; --mosaic is a global source mosaic
     id and can replace --slice/--acquisition.
+
+    With the slice and mosaic known, a background loop also stitches enface previews
+    from the acquisition's own AIP/MIP/orientation/retardance maps (block
+    enface_preview settings) and posts them to Slack. --no-previews turns this off.
     """
     _configure_logging(verbose)
 
@@ -774,6 +844,22 @@ def watch(
     logger.info("Using mosaics_per_slice=%s", scan_config.mosaics_per_slice)
     logger.info("Using tile_saving_type=%s", scan_config.acquisition.tile_saving_type)
 
+    companions = ()
+    if previews:
+        preview_watcher = build_watch_previews(
+            scan_config,
+            project_name=project_name,
+            folder_path=watch_path,
+            fixed_slice_id=fixed_slice_id,
+            fixed_mosaic_slot=fixed_mosaic_slot,
+            acquisition=acquisition,
+            slice_offset=slice_offset,
+            stability_seconds=stability_seconds,
+            poll_interval=poll_interval,
+        )
+        if preview_watcher is not None:
+            companions = (preview_watcher,)
+
     watch_oct(
         project_name=project_name,
         folder_path=watch_path,
@@ -790,4 +876,5 @@ def watch(
         min_complex_file_size_bytes=min_complex_file_size_bytes,
         fixed_slice_id=fixed_slice_id,
         fixed_mosaic_slot=fixed_mosaic_slot,
+        companions=companions,
     )

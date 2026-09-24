@@ -5,7 +5,7 @@ from opticstream.cli.oct.cli import oct_cli
 from opticstream.cli.oct.watch import _configure_logging
 from opticstream.config.psoct_scan_config import get_psoct_scan_config
 from opticstream.flows.psoct.acquisition_preview_flow import (
-    MODALITIES, expected_tiles, fingerprint, preview_dir, read_progress,
+    MODALITIES, expected_tiles, fingerprint, preview_path, progress_path, read_progress,
     preview_enface_batch, preview_enface_acquisition,
 )
 from opticstream.flows.psoct.utils import mosaic_context_from_ident
@@ -21,9 +21,11 @@ class EnfacePreviewWatcher:
         self.folder = Path(folder)
         self.acquisition = acquisition
         context = mosaic_context_from_ident(mosaic_ident, config)
-        self.candidates = list(range(1, context.grid_size_x(config) + 1)) if config.enface_preview.batch_enabled else []
-        if config.enface_preview.acquisition_enabled:
-            self.candidates.append(None)
+        # The full acquisition goes first: once its last batch is stable it is
+        # stitched before any batch previews still waiting in the same pass.
+        self.candidates = [None] if config.enface_preview.acquisition_enabled else []
+        if config.enface_preview.batch_enabled:
+            self.candidates += list(range(1, context.grid_size_x(config) + 1))
 
     def files(self, batch):
         return expected_tiles(self.config, self.ident, self.folder, self.acquisition, batch)
@@ -41,10 +43,11 @@ class EnfacePreviewWatcher:
                 signature = fingerprint(self.config, files)
             except (OSError, ValueError):
                 continue
-            directory = preview_dir(self.config, self.ident, batch)
-            progress = read_progress(directory, signature)
-            stitched = all(m in progress["stitched"] and (directory / f"{m}.jpg").exists()
-                           and (directory / f"{m}.nii").exists() for m in MODALITIES)
+            progress = read_progress(progress_path(self.config, self.ident, batch), signature)
+            stitched = all(m in progress["stitched"]
+                           and preview_path(self.config, self.ident, batch, f"{m}.jpg").exists()
+                           and preview_path(self.config, self.ident, batch, f"{m}.nii").exists()
+                           for m in MODALITIES)
             uploaded = all(m in progress["uploaded"] for m in MODALITIES)
             if not stitched or (slack_enabled and not uploaded):
                 yield batch
@@ -59,11 +62,26 @@ class EnfacePreviewWatcher:
         return 1
 
 
+def build_preview_watcher(config, mosaic_ident, folder, acquisition, *,
+                          stability_seconds=15, poll_interval=5):
+    """Polling watcher that stitches previews for one acquisition folder."""
+    worker = EnfacePreviewWatcher(config, mosaic_ident, Path(folder).resolve(), acquisition)
+    # Validate templates before entering the polling loop.
+    worker.files(None)
+    return PollingStableWatcher(discover_candidates=worker.discover,
+        candidate_key=lambda batch: batch, fingerprint=worker.fingerprint,
+        process=worker.process, stability_seconds=stability_seconds,
+        poll_interval=poll_interval, running_message="Watching acquisition enface maps")
+
+
 @oct_cli.command
 def watch_enface(project_name: str, folder_path: Path, *, slice: int, mosaic: int,
                  acquisition: str, stability_seconds: int = 15,
                  poll_interval: int = 5, verbose: bool = False):
     """Watch one acquisition for complete batches and a complete full mosaic.
+
+    `ops oct watch` already runs these previews when given --slice/--acquisition
+    or --mosaic; use this command only to preview without processing.
 
     slice/mosaic identify the acquisition explicitly, allowing filenames such as
     aip_0001.nii without embedded IDs. acquisition substitutes into file patterns.
@@ -78,10 +96,5 @@ def watch_enface(project_name: str, folder_path: Path, *, slice: int, mosaic: in
     if not config.enface_preview.batch_enabled and not config.enface_preview.acquisition_enabled:
         raise ValueError("Both enface preview flows are disabled in this block")
     ident = OCTMosaicId(project_name=project_name, slice_id=slice, mosaic_id=mosaic)
-    worker = EnfacePreviewWatcher(config, ident, folder_path.resolve(), acquisition)
-    # Validate templates before entering the polling loop.
-    worker.files(None)
-    PollingStableWatcher(discover_candidates=worker.discover,
-        candidate_key=lambda batch: batch, fingerprint=worker.fingerprint,
-        process=worker.process, stability_seconds=stability_seconds,
-        poll_interval=poll_interval, running_message="Watching acquisition enface maps").run()
+    build_preview_watcher(config, ident, folder_path, acquisition,
+                          stability_seconds=stability_seconds, poll_interval=poll_interval).run()

@@ -5,7 +5,10 @@ Run only one preview watcher for a given project/slice/mosaic at a time.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
+from string import Formatter
 import tempfile
 import time
 
@@ -16,12 +19,48 @@ import yaml
 
 from opticstream.config.psoct_scan_config import PSOCTScanConfigModel
 from opticstream.data_processing.qc.convert_image import convert_image
-from opticstream.flows.psoct.utils import mosaic_context_from_ident
+from opticstream.flows.psoct.utils import get_slice_paths, mosaic_context_from_ident
 from opticstream.state.oct_project_state import OCTMosaicId
 from opticstream.tasks.slack_notification import upload_multiple_files_to_slack
 from opticstream.utils.slack_settings import slack_notifications_enabled
 
 MODALITIES = ("aip", "mip", "ori", "ret")
+
+
+def _padded_image_matches(pattern, values, root):
+    """Map image number -> filename for a pattern whose {image} has no format spec.
+
+    Like filename_pattern, a bare {image} matches any zero padding (1, 01, 0001),
+    compared as a number. Returns None when {image} has an explicit format spec
+    (e.g. {image:04d}), which keeps exact rendering.
+    """
+    parts = []
+    for literal, field, spec, conversion in Formatter().parse(pattern):
+        parts.append(re.escape(literal))
+        if field is None:
+            continue
+        if field == "image":
+            if spec or conversion:
+                return None
+            parts.append(r"(?P<image>[0-9]+)")
+        else:
+            parts.append(re.escape(format(values[field], spec)))
+    regex = re.compile("".join(parts))
+    matches = {}
+    try:
+        entries = list(os.scandir(root))
+    except FileNotFoundError:
+        return matches
+    for entry in entries:
+        found = regex.fullmatch(entry.name)
+        if found is None:
+            continue
+        number = int(found["image"])
+        if number in matches:
+            raise ValueError(f"Several files match image {number} of {pattern!r}: "
+                             f"{matches[number]}, {entry.name}")
+        matches[number] = entry.name
+    return matches
 
 
 def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None):
@@ -33,14 +72,17 @@ def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None):
         raise ValueError(f"batch_id must be between 1 and {columns}")
     indices = range(columns * rows) if batch_id is None else range((batch_id - 1) * rows, batch_id * rows)
     root = Path(input_dir).resolve()
+    values = dict(slice=mosaic_ident.slice_id, mosaic=mosaic_ident.mosaic_id,
+                  acquisition=acquisition, project=mosaic_ident.project_name)
     result = {}
     for modality in MODALITIES:
         pattern = getattr(config.enface_preview, f"{modality}_pattern")
+        existing = _padded_image_matches(pattern, values, root)
         paths = {}
         for index in indices:
-            name = pattern.format(image=index + config.enface_preview.first_image,
-                                  slice=mosaic_ident.slice_id, mosaic=mosaic_ident.mosaic_id,
-                                  acquisition=acquisition, project=mosaic_ident.project_name)
+            image = index + config.enface_preview.first_image
+            # Missing tiles keep the unpadded name so callers still see them as absent.
+            name = (existing or {}).get(image) or pattern.format(image=image, **values)
             path = (root / name).resolve()
             if path.parent != root:
                 raise ValueError("Rendered preview filename must remain inside the input directory")
@@ -64,14 +106,27 @@ def fingerprint(config, files):
     return hashlib.sha256(json.dumps([records, settings], sort_keys=True).encode()).hexdigest()
 
 
-def preview_dir(config, mosaic_ident, batch_id=None):
-    scope = "acquisition" if batch_id is None else f"batch-{batch_id:04d}"
-    return Path(config.project_base_path) / "acquisition-previews" / f"slice-{mosaic_ident.slice_id:03d}" / f"mosaic-{mosaic_ident.mosaic_id:03d}" / scope
+def preview_dir(config, mosaic_ident):
+    """``{project_base}/slice-NN/acquisition_previews``, shared by all mosaics of a slice."""
+    slice_path, *_ = get_slice_paths(config.project_base_path, mosaic_ident.slice_id)
+    return slice_path / "acquisition_previews"
 
 
-def read_progress(directory, signature):
+def preview_path(config, mosaic_ident, batch_id, name):
+    """Scope-prefixed file, e.g. ``mosaic_001_aip.nii`` or ``mosaic_001_batch_0003_aip.nii``."""
+    prefix = f"mosaic_{mosaic_ident.mosaic_id:03d}"
+    if batch_id is not None:
+        prefix += f"_batch_{batch_id:04d}"
+    return preview_dir(config, mosaic_ident) / f"{prefix}_{name}"
+
+
+def progress_path(config, mosaic_ident, batch_id=None):
+    return preview_path(config, mosaic_ident, batch_id, "progress.json")
+
+
+def read_progress(path, signature):
     try:
-        data = json.loads((directory / "progress.json").read_text())
+        data = json.loads(Path(path).read_text())
     except (FileNotFoundError, ValueError):
         return {"signature": signature, "stitched": [], "uploaded": []}
     if data.get("signature") != signature:
@@ -79,14 +134,15 @@ def read_progress(directory, signature):
     return data
 
 
-def save_progress(directory, progress):
-    directory.mkdir(parents=True, exist_ok=True)
-    temporary = directory / "progress.json.tmp"
+def save_progress(path, progress):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(progress, indent=2))
     # Windows indexers/antivirus may briefly hold the replaced file open.
     for attempt in range(5):
         try:
-            temporary.replace(directory / "progress.json")
+            temporary.replace(path)
             break
         except PermissionError:
             if attempt == 4:
@@ -181,21 +237,22 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None):
         return {}
     files = expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id)
     signature = fingerprint(config, files)
-    directory = preview_dir(config, mosaic_ident, batch_id)
-    progress = read_progress(directory, signature)
+    progress_file = progress_path(config, mosaic_ident, batch_id)
+    progress = read_progress(progress_file, signature)
+    outputs = {m: preview_path(config, mosaic_ident, batch_id, f"{m}.nii") for m in MODALITIES}
     for modality in MODALITIES:
-        output = directory / f"{modality}.nii"
+        output = outputs[modality]
         if modality not in progress["stitched"] or not output.with_suffix(".jpg").exists() or not output.exists():
             stitch_preview_modality(config, files[modality], modality, output, batch_id)
             if fingerprint(config, files) != signature:
                 raise RuntimeError("Acquisition files changed while stitching; wait for stability and retry")
             if modality not in progress["stitched"]:
                 progress["stitched"].append(modality)
-            save_progress(directory, progress)
+            save_progress(progress_file, progress)
     if slack_notifications_enabled():
         remaining = [m for m in MODALITIES if m not in progress["uploaded"]]
         if remaining:
-            paths = [str(directory / f"{m}.jpg") for m in remaining]
+            paths = [str(outputs[m].with_suffix(".jpg")) for m in remaining]
             scope = "full acquisition" if batch_id is None else f"batch {batch_id}"
             label = f"{mosaic_ident.project_name}, slice {mosaic_ident.slice_id}, mosaic {mosaic_ident.mosaic_id}, {acquisition}, {scope}"
             results = upload_multiple_files_to_slack(filepaths=paths,
@@ -203,10 +260,10 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None):
             for modality, path in zip(remaining, paths):
                 if results.get(path):
                     progress["uploaded"].append(modality)
-            save_progress(directory, progress)
+            save_progress(progress_file, progress)
             if any(not results.get(path) for path in paths):
                 raise RuntimeError("Some preview Slack uploads failed; successful uploads are checkpointed")
-    return {m: str(directory / f"{m}.jpg") for m in MODALITIES}
+    return {m: str(outputs[m].with_suffix(".jpg")) for m in MODALITIES}
 
 
 @flow(name="preview-enface-batch")

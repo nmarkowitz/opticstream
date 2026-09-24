@@ -7,8 +7,12 @@ Two new Prefect flows call linc-convert `mosaic2d()` and send JPEG previews to S
 
 These consume AIP, MIP, orientation (`ori`) and retardance (`ret`) files written by
 the acquisition software, independently of spectral processing and MATLAB. They
-do not set OpticStream processing/upload milestones. Existing processed-output QC
-flows remain separate. Preview images are not uploaded to DANDI or LINC.
+do not set OpticStream processing/upload milestones. Preview images are not
+uploaded to DANDI or LINC.
+
+These previews are the pipeline's Slack QC images. The pipeline's own stitched 2D
+mosaics (`slice-NN/stitched/mosaic_NNN_*.jpg`) are still written but are posted to
+Slack only when the block's `stitched_enface_slack_upload` is true (default false).
 
 ## Configure and run
 
@@ -16,22 +20,25 @@ Refresh saved block schemas with `python -m opticstream.config.migrate_psoct_blo
 --apply` using the project's virtual environment. In the block's new
 `enface_preview` group, configure all four filename patterns. They are exact Python
 format templates (not globs), with `{image}` required and `{slice}`, `{mosaic}`,
-`{acquisition}`, `{project}` optional. Numeric formats such as `{image:04d}` are
-supported. These templates are separate from the spectral watcher's parser.
+`{acquisition}`, `{project}` optional. A plain `{image}` matches the tile number with
+any zero padding (`spectral_{image}_processed_aip.nii` finds
+`spectral_0001_processed_aip.nii`), like the spectral watcher's `filename_pattern`.
+An explicit format such as `{image:04d}` renders the name exactly instead. Two files
+that differ only in padding (`aip_1.nii` and `aip_0001.nii`) are an error.
 
 For example:
 
 ```json
 {
-  "aip_pattern": "slice-{slice}_acq-{acquisition}_aip_{image:04d}.nii",
-  "mip_pattern": "slice-{slice}_acq-{acquisition}_mip_{image:04d}.nii",
-  "ori_pattern": "slice-{slice}_acq-{acquisition}_ori_{image:04d}.nii",
-  "ret_pattern": "slice-{slice}_acq-{acquisition}_ret_{image:04d}.nii"
+  "aip_pattern": "slice-{slice}_acq-{acquisition}_aip_{image}.nii",
+  "mip_pattern": "slice-{slice}_acq-{acquisition}_mip_{image}.nii",
+  "ori_pattern": "slice-{slice}_acq-{acquisition}_ori_{image}.nii",
+  "ret_pattern": "slice-{slice}_acq-{acquisition}_ret_{image}.nii"
 }
 ```
 
 Change names/suffixes to match the acquisition software exactly. Simple names such
-as `aip_{image:04d}.nii` are supported when the folder contains only that acquisition.
+as `aip_{image}.nii` are supported when the folder contains only that acquisition.
 NIfTI (.nii/.nii.gz) and formats supported by the existing QC loader are accepted;
 only 2D maps or maps with singleton trailing dimensions are supported. All four
 modalities must be present for every expected tile before a candidate is ready.
@@ -39,12 +46,28 @@ modalities must be present for every expected tile before a candidate is ready.
 From Miniforge Prompt, with the project's venv activated and Prefect API configured:
 
 ```cmd
-opticstream oct watch-enface human-10um D:\data\acquisition --slice 1 --mosaic 1 --acquisition normal
+opticstream oct watch human-10um D:\data\acquisition --slice 1 --acquisition normal0deg
 ```
 
-This command runs the flows directly as files stabilize; it does not require
-`oct serve`. `oct serve all` additionally registers the two manual preview flows.
-The existing `oct watch` remains unchanged; run `watch-enface` separately.
+The main `oct watch` runs the previews in a background polling loop next to batch
+dispatch whenever it knows the folder's slice and mosaic (`--slice` with `--acquisition`, or
+`--mosaic`); the acquisition label is looked up from `acquisition_mosaic_map` when
+only `--mosaic` is given. Previews do not wait for batch processing (e.g. MATLAB on
+the last batch): the full-acquisition preview starts as soon as the last batch's
+maps have been stable for `--stability-seconds` (default 15), ahead of any batch
+previews still pending. A preview error is logged and never stops batch watching.
+Pass `--no-previews` to turn them off for one run, or disable them in the block with
+`batch_enabled`/`acquisition_enabled`.
+
+To preview without processing, run the standalone watcher instead:
+
+```cmd
+opticstream oct watch-enface human-10um D:\data\acquisition --slice 1 --mosaic 1 --acquisition normal0deg
+```
+
+Both run the flows directly as files stabilize; neither requires `oct serve`.
+`oct serve all` additionally registers the two manual preview flows. Do not run
+`watch` and `watch-enface` for the same acquisition at the same time.
 Use one watcher per acquisition, and do not run a manual preview for the same
 acquisition concurrently. Select the correct mosaic ID (normal vs tilted) so the
 existing `grid_size_x_normal`/`grid_size_x_tilted` selects the correct batch count.
@@ -97,9 +120,15 @@ Corrupt or inconsistent tiles cause failure rather than a partial mosaic.
 
 ## Outputs, Slack and retries
 
-Outputs and per-scope `progress.json` checkpoints are under
-`project_base_path/acquisition-previews/slice-NNN/mosaic-NNN/`, with separate
-`batch-NNNN` and `acquisition` directories. Completed work is skipped on restart.
+All previews for a slice go in one folder, `project_base_path/slice-NN/acquisition_previews/`,
+next to the pipeline's `processed/` and `stitched/`. File names carry the mosaic (and
+batch) so mosaics never collide:
+
+- full acquisition: `mosaic_001_aip.nii`, `mosaic_001_aip.jpg`, ... and `mosaic_001_progress.json`
+- batch 3: `mosaic_001_batch_0003_aip.nii`, `mosaic_001_batch_0003_aip.jpg`, ... and
+  `mosaic_001_batch_0003_progress.json`
+
+The `progress.json` files are per-scope checkpoints. Completed work is skipped on restart.
 Input path/size/mtime or relevant configuration changes invalidate checkpoints.
 Changing only file content without changing size/mtime is not detected.
 
@@ -112,5 +141,5 @@ after Slack accepts an upload but before the checkpoint is saved can duplicate i
 `matlab_processing_enabled` does not gate these non-MATLAB flows. Disable batch or
 full previews independently with `batch_enabled`/`acquisition_enabled`. Restart the
 watcher after editing block fields. A project-state reset does not erase preview
-checkpoints; to deliberately resend, archive/move the relevant preview output
-directory while the watcher is stopped.
+checkpoints; to deliberately resend, delete or move that scope's `*_progress.json`
+while the watcher is stopped (deleting only its `.nii`/`.jpg` restitches without resending).

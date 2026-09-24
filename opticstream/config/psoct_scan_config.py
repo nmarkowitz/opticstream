@@ -333,7 +333,15 @@ class PSOCTScanConfigModel(BaseModel):
 
     enface_preview: EnfacePreviewConfig = Field(
         default_factory=EnfacePreviewConfig,
-        description="Acquisition-produced AIP/MIP/orientation/retardance previews for watch-enface; independent of MATLAB and spectral processing state.",
+        description="Acquisition-produced AIP/MIP/orientation/retardance previews, stitched by `ops oct watch` (or watch-enface) and posted to Slack; independent of MATLAB and spectral processing state.",
+    )
+    stitched_enface_slack_upload: bool = Field(
+        default=False,
+        description=(
+            "Post the pipeline's stitched 2D enface mosaics (slice-NN/stitched/mosaic_NNN_*.jpg) "
+            "to Slack. The JPEGs are always written; when false, only the acquisition "
+            "previews (enface_preview) go to Slack."
+        ),
     )
 
     mask_threshold_normal: float = Field(

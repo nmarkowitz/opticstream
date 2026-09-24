@@ -97,12 +97,17 @@ def _upload_dandi_api(
     *,
     max_jobs: str,
     dandi_api_key: Secret | None = None,
+    realpath: bool = True,
 ) -> None:
     """Upload DANDI assets through the API, including generic NIfTI files.
 
     Recent DANDI CLIs filter unrecognized files before upload and no longer
     provide the ``--allow-any-path`` switch.  The API equivalent is
     ``allow_any_path=True``.
+
+    ``realpath=False`` keeps symlinks as given (e.g. enface outputs symlinked
+    into the dandiset), so the dandiset is found from the link location rather
+    than from the link target outside it.
     """
     from dandi.upload import UploadExisting, UploadValidation, upload
 
@@ -111,7 +116,10 @@ def _upload_dandi_api(
     except (ValueError, AttributeError):
         jobs = jobs_per_file = 5
 
-    paths = [Path(os.path.realpath(path)) for path in file_list]
+    paths = [
+        Path(os.path.realpath(path)) if realpath else Path(path).absolute()
+        for path in file_list
+    ]
     # DANDI needs the local dandiset metadata alongside assets in order to
     # resolve the target dataset.  Walk upward from each asset and include the
     # nearest dandiset.yaml once when it exists (e.g. .../001769/dandiset.yaml).
@@ -205,6 +213,7 @@ def upload_to_dandi_batch(
             file_list,
             max_jobs=max_jobs,
             dandi_api_key=dandi_api_key,
+            realpath=realpath,
         )
         logger.info("DANDI batch upload completed")
         return

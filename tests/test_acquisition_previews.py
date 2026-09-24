@@ -45,6 +45,30 @@ class PreviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 3)
 
+    def test_plain_image_matches_any_padding(self):
+        self.cfg.enface_preview.aip_pattern = "spectral_{image}_processed_aip.nii"
+        (self.root / "spectral_0003_processed_aip.nii").write_bytes(b"x")
+        (self.root / "spectral_4_processed_aip.nii").write_bytes(b"x")
+        (self.root / "spectral_0003_processed_aip.nii.bak").write_bytes(b"x")
+        files = preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 2)
+        self.assertEqual(files["aip"][2].name, "spectral_0003_processed_aip.nii")
+        self.assertEqual(files["aip"][3].name, "spectral_4_processed_aip.nii")
+        # Missing tiles keep a rendered name and are reported absent.
+        files = preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 1)
+        self.assertEqual(files["aip"][0].name, "spectral_1_processed_aip.nii")
+        self.assertFalse(files["aip"][0].exists())
+
+    def test_plain_image_with_other_placeholders_and_ambiguity(self):
+        self.cfg.enface_preview.aip_pattern = "s{slice}_m{mosaic:03d}_{acquisition}_{image}.nii"
+        (self.root / "s1_m001_normal_01.nii").write_bytes(b"x")
+        (self.root / "s1_m002_normal_02.nii").write_bytes(b"x")
+        files = preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 1)
+        self.assertEqual(files["aip"][0].name, "s1_m001_normal_01.nii")
+        self.assertFalse(files["aip"][1].exists())
+        (self.root / "s1_m001_normal_1.nii").write_bytes(b"x")
+        with self.assertRaises(ValueError):
+            preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 1)
+
     def test_geometry(self):
         self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "column-by-column"), (8, 0))
         self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "snake-by-columns"), (8, 16))
@@ -93,7 +117,7 @@ class PreviewTests(unittest.TestCase):
         self.create_tiles(2)
         self.assertEqual(list(watcher.discover()), [1])
         self.create_tiles(4)
-        self.assertEqual(list(watcher.discover()), [1, 2, None])
+        self.assertEqual(list(watcher.discover()), [None, 1, 2])
         (self.root / "ret_0004.nii").unlink()
         self.assertEqual(list(watcher.discover()), [1])
 
@@ -141,7 +165,7 @@ class PreviewTests(unittest.TestCase):
             output.with_suffix(".jpg").write_bytes(b"jpeg")
         with patch.object(preview, "stitch_preview_modality", side_effect=stitch) as stitched, \
              patch.object(preview, "upload_multiple_files_to_slack") as upload:
-            upload.side_effect = lambda **kw: {p: Path(p).stem != "ret" for p in kw["filepaths"]}
+            upload.side_effect = lambda **kw: {p: not Path(p).stem.endswith("_ret") for p in kw["filepaths"]}
             with self.assertRaises(RuntimeError):
                 preview.run_preview(self.cfg, self.ident, self.root, "normal", 1)
             upload.side_effect = lambda **kw: {p: True for p in kw["filepaths"]}
@@ -149,17 +173,40 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(len(upload.call_args.kwargs["filepaths"]), 1)
             self.assertEqual(stitched.call_count, 4)
 
+    @patch.object(preview, "slack_notifications_enabled", return_value=False)
+    def test_outputs_in_slice_folder_named_by_mosaic(self, slack):
+        self.create_tiles()
+        def stitch(cfg, files, modality, output, batch_id):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"nifti")
+            output.with_suffix(".jpg").write_bytes(b"jpeg")
+        folder = self.root / "out" / "slice-01" / "acquisition_previews"
+        with patch.object(preview, "stitch_preview_modality", side_effect=stitch):
+            result = preview.run_preview(self.cfg, self.ident, self.root, "normal")
+            preview.run_preview(self.cfg, self.ident, self.root, "normal", 2)
+            mosaic2 = OCTMosaicId(project_name="test", slice_id=1, mosaic_id=2)
+            self.cfg.acquisition.grid_size_x_tilted = 2
+            preview.run_preview(self.cfg, mosaic2, self.root, "tilted")
+        self.assertEqual(result["aip"], str(folder / "mosaic_001_aip.jpg"))
+        names = {p.name for p in folder.iterdir()}
+        for prefix in ("mosaic_001", "mosaic_001_batch_0002", "mosaic_002"):
+            for m in preview.MODALITIES:
+                self.assertIn(f"{prefix}_{m}.nii", names)
+                self.assertIn(f"{prefix}_{m}.jpg", names)
+            self.assertIn(f"{prefix}_progress.json", names)
+        self.assertEqual(len(names), 3 * (2 * len(preview.MODALITIES) + 1))
+
     def test_changed_input_invalidates_progress(self):
         self.create_tiles()
         files = preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 1)
         before = preview.fingerprint(self.cfg, files)
-        directory = preview.preview_dir(self.cfg, self.ident, 1)
-        preview.save_progress(directory, {"signature": before, "stitched": list(preview.MODALITIES), "uploaded": []})
+        progress_file = preview.progress_path(self.cfg, self.ident, 1)
+        preview.save_progress(progress_file, {"signature": before, "stitched": list(preview.MODALITIES), "uploaded": []})
         with (self.root / "aip_0001.nii").open("ab") as stream:
             stream.write(b"changed")
         after = preview.fingerprint(self.cfg, files)
         self.assertNotEqual(before, after)
-        self.assertEqual(preview.read_progress(directory, after)["stitched"], [])
+        self.assertEqual(preview.read_progress(progress_file, after)["stitched"], [])
 
     @patch("opticstream.cli.oct.watch_enface.slack_notifications_enabled", return_value=False)
     def test_polling_waits_for_stability(self, slack):

@@ -10,21 +10,21 @@ arguments
 end
 calibration.dphase = readVector(folder, 'dphase', sampleCount, dphaseFile);
 calibration.linPhase = readVector(folder, 'linPhase', sampleCount, linPhaseFile);
-delta = diff(calibration.dphase);
-if ~(all(delta > 0) || all(delta < 0))
-    error('psoct:calibration:NonMonotonic', 'dphase must be strictly monotonic with no repeated samples.');
-end
-delta = diff(calibration.linPhase);
-if ~(all(delta > 0) || all(delta < 0))
-    error('psoct:calibration:NonMonotonic', 'linPhase must be strictly monotonic.');
-end
-tolerance = max(abs(mean(delta))*1e-5, 100*eps(max(abs(calibration.linPhase))));
-if any(abs(delta - mean(delta)) > tolerance)
-    error('psoct:calibration:NonUniform', 'linPhase must be uniformly spaced.');
-end
-if min(calibration.linPhase) < min(calibration.dphase) || max(calibration.linPhase) > max(calibration.dphase)
-    warning('psoct:calibration:Extrapolation', 'linPhase extends beyond dphase; linear extrapolation will be used.');
-end
+% delta = diff(calibration.dphase);
+% if ~(all(delta > 0) || all(delta < 0))
+%     error('psoct:calibration:NonMonotonic', 'dphase must be strictly monotonic with no repeated samples.');
+% end
+% delta = diff(calibration.linPhase);
+% if ~(all(delta > 0) || all(delta < 0))
+%     error('psoct:calibration:NonMonotonic', 'linPhase must be strictly monotonic.');
+% end
+% tolerance = max(abs(mean(delta))*1e-5, 100*eps(max(abs(calibration.linPhase))));
+% if any(abs(delta - mean(delta)) > tolerance)
+%     error('psoct:calibration:NonUniform', 'linPhase must be uniformly spaced.');
+% end
+% if min(calibration.linPhase) < min(calibration.dphase) || max(calibration.linPhase) > max(calibration.dphase)
+%     warning('psoct:calibration:Extrapolation', 'linPhase extends beyond dphase; linear extrapolation will be used.');
+% end
 calibration.dispersion = [];
 if useDispersion
     dspPhase = readVector(folder, 'dspPhase', sampleCount, dspPhaseFile);

@@ -9,7 +9,8 @@ function [Jones1_3D, Jones2_3D] = spectral2complex(spectralFile, spectralOpts, o
 %                    - dispCompFile: Path to the dispersion compensation file.
 %                    - AlineSize   : Size of the A-line (pixels of X axis).
 %                    - BlineSize   : Size of the B-line (pixels of Y axis).
-%                    - isRawFormat : Whether input is in packed 12-bit raw format.
+%                    - isRawFormat : Input is headerless packed 12-bit data
+%                                    (read into local variable is12bit).
 %     outputOpts   : Struct with fields:
 %                    - Paths       : Struct with fields:
 %                      - complex : Path to the output complex NIfTI file.
@@ -33,7 +34,7 @@ outputOpts = psoct.internal.opts.normalizeOutputOpts(outputOpts);
 dispCompFile = string(spectralOpts.dispCompFile);
 AlineSize = spectralOpts.AlineSize;
 BlineSize = spectralOpts.BlineSize;
-isRawFormat = spectralOpts.isRawFormat;
+is12bit = spectralOpts.isRawFormat; % packed 12-bit, headerless (tile_saving_type=spectral_12bit)
 
 % Constants describing the acquisition format.
 HEADER_BYTES = 352;          % Header size of Nifti-1 file
@@ -51,7 +52,7 @@ AutoCorrPeakCut = 24;                 % multiple of 8
 DepthL          = 1024 - AutoCorrPeakCut;  %#ok<NASGU> kept for compatibility
 AlineLength = 2048; % Headerless packed raw retains its legacy geometry.
 niftiData = [];
-if ~isRawFormat
+if ~is12bit
     info = niftiinfo(spectralFile);
     niftiData = niftiread(info);
     dims = size(niftiData);
@@ -74,7 +75,7 @@ end
 
 % Buffer size bookkeeping
 numSamplesPerBuffer = AlineLength * AlineSize;
-if isRawFormat
+if is12bit
     % Packed 12-bit: 3 bytes per 2 samples
     bytesPerBuffer = numSamplesPerBuffer * (BITS_PER_SAMPLE_RAW / 8);
 else
@@ -128,7 +129,7 @@ params.Wavelengths_r          = Wavelengths_r;
 params.InterpolatedWavelengths = InterpolatedWavelengths2;
 
 % Read the channel-specific corrections from the two halves of one file.
-if phaseMode && spectralOpts.phaseCalibrationDispersion
+if phaseMode && spectralOpts.phaseCalibrationDispersion && ~isempty(calibration.dispersion)
     phaseCorrection1 = calibration.dispersion;
     phaseCorrection2 = calibration.dispersion;
 else
@@ -149,7 +150,7 @@ Jones2_3D = complex(zeros(Bline, Aline, DepthL));
 fileInfo = dir(spectralFile);
 if ~isempty(fileInfo)
     expectedBytes = Bline * (2 * bytesPerBuffer);
-    if ~isRawFormat
+    if ~is12bit
         expectedBytes = expectedBytes + HEADER_BYTES;
     end
     if fileInfo.bytes < expectedBytes
@@ -173,9 +174,9 @@ for blineIndex = 1:Bline
     end
     
     % Read raw wavelength buffers for both polarization channels
-    if isRawFormat
+    if is12bit
         [WavelengthBuffer1, WavelengthBuffer2] = readBlineBuffers( ...
-            fid, blineIndex, params, isRawFormat, HEADER_BYTES);
+            fid, blineIndex, params, is12bit, HEADER_BYTES);
     else
         WavelengthBuffer1 = double(niftiData(:, 1:Aline, blineIndex));
         WavelengthBuffer2 = double(niftiData(:, Aline+1:2*Aline, blineIndex));
@@ -224,11 +225,11 @@ end
 % -------------------------------------------------------------------------
 
 function [WavelengthBuffer1, WavelengthBuffer2] = readBlineBuffers( ...
-    fid, blineIndex, params, isRawFormat, headerBytes)
+    fid, blineIndex, params, is12bit, headerBytes)
 %READBLINEBUFFERS Read both polarization buffers for a single B-line.
 
 offsetBase = (blineIndex - 1) * (2 * params.bytesPerBuffer); % two buffers (channels) per B-line
-if ~isRawFormat
+if ~is12bit
     offsetBase = offsetBase + headerBytes; % header is present once at the beginning
 end
 
@@ -238,7 +239,7 @@ if fseekStatus ~= 0
         'Failed to seek to offset %d in spectral file.', offsetBase);
 end
 
-if ~isRawFormat
+if ~is12bit
     data1 = fread(fid, params.numSamplesPerBuffer, 'uint16');
     data2 = fread(fid, params.numSamplesPerBuffer, 'uint16');
 else

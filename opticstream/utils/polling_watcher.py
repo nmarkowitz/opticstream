@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -78,9 +79,22 @@ class PollingStableWatcher(Generic[T, K]):
 
         self._stability: dict[K, StabilityRecord] = {}
 
-    def run(self) -> None:
+    def run(self, *companions: "PollingStableWatcher") -> None:
+        """Poll until Ctrl+C / SIGTERM.
+
+        ``companions`` (e.g. enface previews alongside batch dispatch) are polled in
+        a background thread, so they react as soon as their files are stable instead
+        of waiting for this watcher's processing (e.g. a MATLAB batch). Their errors
+        are logged and never stop this watcher.
+        """
         global _shutdown_requested
         _shutdown_requested = False
+        companion_thread = None
+        if companions:
+            companion_thread = threading.Thread(
+                target=_run_companions, args=(companions,), name="companion-watchers",
+                daemon=True,
+            )
 
         signal.signal(signal.SIGINT, _signal_handler)
         signal.signal(signal.SIGTERM, _signal_handler)
@@ -93,6 +107,8 @@ class PollingStableWatcher(Generic[T, K]):
         )
         logger.info("Press Ctrl+C to stop")
 
+        if companion_thread is not None:
+            companion_thread.start()
         iteration = 0
         try:
             while not _shutdown_requested:
@@ -107,6 +123,10 @@ class PollingStableWatcher(Generic[T, K]):
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt, shutting down")
         finally:
+            if companion_thread is not None:
+                _shutdown_requested = True
+                # Daemon thread: an in-progress companion job does not block exit.
+                companion_thread.join(timeout=1)
             logger.info("Watcher stopped after %s iterations", iteration)
 
     def _run_iteration(self) -> None:
@@ -175,3 +195,19 @@ class PollingStableWatcher(Generic[T, K]):
         for key in disappeared_keys:
             logger.debug("Candidate disappeared from disk, dropping from tracking: key=%r", key)
             self._stability.pop(key, None)
+
+
+def _run_companions(companions) -> None:
+    """Background loop for ``PollingStableWatcher.run`` companions."""
+    while not _shutdown_requested:
+        for companion in companions:
+            if _shutdown_requested:
+                return
+            try:
+                companion._run_iteration()
+            except Exception as exc:
+                logger.exception("Companion watcher iteration failed: %s", exc)
+        interval = min(companion.poll_interval for companion in companions)
+        deadline = time.monotonic() + interval
+        while not _shutdown_requested and time.monotonic() < deadline:
+            time.sleep(min(0.5, interval))

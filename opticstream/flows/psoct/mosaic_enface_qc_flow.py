@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Sequence
 from prefect import flow, task
 from prefect.logging import get_run_logger
 
+from opticstream.config.psoct_scan_config import get_psoct_scan_config
 from opticstream.data_processing.qc.convert_image import convert_image
 from opticstream.events import MOSAIC_ENFACE_STITCHED
 from opticstream.events.utils import get_event_trigger
@@ -80,10 +81,13 @@ def mosaic_enface_qc_slack_upload_flow(
     *,
     mosaic_ident: OCTMosaicId,
     enface_outputs: Dict[str, Path],
+    upload_to_slack: Optional[bool] = None,
 ) -> Dict[str, bool]:
     """
-    Convert stitched enface NIfTIs to JPEG previews and upload to Slack.
+    Convert stitched enface NIfTIs to JPEG previews and optionally upload to Slack.
 
+    ``upload_to_slack`` defaults to the block's ``stitched_enface_slack_upload``;
+    pass True for a manual rerun that should post regardless.
     Best-effort: any Slack failure is logged and returns False results.
     """
     logger = get_run_logger()
@@ -115,6 +119,17 @@ def mosaic_enface_qc_slack_upload_flow(
 
     if not modality_to_jpeg:
         logger.warning(f"No QC JPEGs to upload for mosaic {mosaic_id}")
+        return {m: False for m in expected_modalities}
+
+    if upload_to_slack is None:
+        upload_to_slack = get_psoct_scan_config(
+            mosaic_ident.project_name
+        ).stitched_enface_slack_upload
+    if not upload_to_slack:
+        logger.info(
+            f"Wrote {len(modality_to_jpeg)} QC JPEGs for mosaic {mosaic_id}; Slack upload "
+            "off (stitched_enface_slack_upload=false)"
+        )
         return {m: False for m in expected_modalities}
 
     filepaths = [str(p) for p in modality_to_jpeg.values()]
