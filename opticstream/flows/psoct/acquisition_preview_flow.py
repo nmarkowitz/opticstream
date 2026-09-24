@@ -27,12 +27,11 @@ from opticstream.utils.slack_settings import slack_notifications_enabled
 MODALITIES = ("aip", "mip", "ori", "ret")
 
 
-def _padded_image_matches(pattern, values, root):
-    """Map image number -> filename for a pattern whose {image} has no format spec.
+def _image_regex(pattern, values, *, any_padding):
+    """Regex for a preview pattern with {image} as a digits group, or None.
 
-    Like filename_pattern, a bare {image} matches any zero padding (1, 01, 0001),
-    compared as a number. Returns None when {image} has an explicit format spec
-    (e.g. {image:04d}), which keeps exact rendering.
+    Returns None when ``any_padding`` is False and {image} has an explicit
+    format spec (e.g. {image:04d}), which keeps exact rendering.
     """
     parts = []
     for literal, field, spec, conversion in Formatter().parse(pattern):
@@ -40,31 +39,59 @@ def _padded_image_matches(pattern, values, root):
         if field is None:
             continue
         if field == "image":
-            if spec or conversion:
+            if (spec or conversion) and not any_padding:
                 return None
             parts.append(r"(?P<image>[0-9]+)")
         else:
             parts.append(re.escape(format(values[field], spec)))
-    regex = re.compile("".join(parts))
-    matches = {}
+    return re.compile("".join(parts))
+
+
+def list_names(root):
+    """File names in ``root`` (empty if it does not exist yet)."""
     try:
-        entries = list(os.scandir(root))
+        return [entry.name for entry in os.scandir(root)]
     except FileNotFoundError:
-        return matches
-    for entry in entries:
-        found = regex.fullmatch(entry.name)
+        return []
+
+
+def image_numbers_present(pattern, values, names):
+    """Image numbers of files matching ``pattern``, whatever their padding."""
+    regex = _image_regex(pattern, values, any_padding=True)
+    return {int(found["image"]) for name in names if (found := regex.fullmatch(name))}
+
+
+def _padded_image_matches(pattern, values, names):
+    """Map image number -> filename for a pattern whose {image} has no format spec.
+
+    Like filename_pattern, a bare {image} matches any zero padding (1, 01, 0001),
+    compared as a number. Returns None when {image} has an explicit format spec
+    (e.g. {image:04d}), which keeps exact rendering.
+    """
+    regex = _image_regex(pattern, values, any_padding=False)
+    if regex is None:
+        return None
+    matches = {}
+    for name in names:
+        found = regex.fullmatch(name)
         if found is None:
             continue
         number = int(found["image"])
         if number in matches:
             raise ValueError(f"Several files match image {number} of {pattern!r}: "
-                             f"{matches[number]}, {entry.name}")
-        matches[number] = entry.name
+                             f"{matches[number]}, {name}")
+        matches[number] = name
     return matches
 
 
-def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None):
-    """Return exact expected paths, never infer completeness from file counts."""
+def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None, *,
+                   image_offset=0, names=None):
+    """Return exact expected paths, never infer completeness from file counts.
+
+    ``image_offset`` shifts filename image numbers for continuously numbered
+    acquisitions (tile 1 of this mosaic is image first_image + image_offset).
+    ``names`` is an optional pre-read listing of ``input_dir``.
+    """
     context = mosaic_context_from_ident(mosaic_ident, config)
     rows = config.acquisition.grid_size_y
     columns = context.grid_size_x(config)
@@ -74,13 +101,15 @@ def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None):
     root = Path(input_dir).resolve()
     values = dict(slice=mosaic_ident.slice_id, mosaic=mosaic_ident.mosaic_id,
                   acquisition=acquisition, project=mosaic_ident.project_name)
+    if names is None:
+        names = list_names(root)
     result = {}
     for modality in MODALITIES:
         pattern = getattr(config.enface_preview, f"{modality}_pattern")
-        existing = _padded_image_matches(pattern, values, root)
+        existing = _padded_image_matches(pattern, values, names)
         paths = {}
         for index in indices:
-            image = index + config.enface_preview.first_image
+            image = index + config.enface_preview.first_image + image_offset
             # Missing tiles keep the unpadded name so callers still see them as absent.
             name = (existing or {}).get(image) or pattern.format(image=image, **values)
             path = (root / name).resolve()
@@ -231,11 +260,12 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
     return jpeg
 
 
-def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None):
+def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None, *, image_offset=0):
     enabled = config.enface_preview.acquisition_enabled if batch_id is None else config.enface_preview.batch_enabled
     if not enabled:
         return {}
-    files = expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id)
+    files = expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id,
+                           image_offset=image_offset)
     signature = fingerprint(config, files)
     progress_file = progress_path(config, mosaic_ident, batch_id)
     progress = read_progress(progress_file, signature)
@@ -268,14 +298,17 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None):
 
 @flow(name="preview-enface-batch")
 def preview_enface_batch(config: PSOCTScanConfigModel, mosaic_ident: OCTMosaicId,
-                          input_dir: Path, acquisition: str, batch_id: int):
-    return run_preview(config, mosaic_ident, input_dir, acquisition, batch_id)
+                          input_dir: Path, acquisition: str, batch_id: int,
+                          image_offset: int = 0):
+    return run_preview(config, mosaic_ident, input_dir, acquisition, batch_id,
+                       image_offset=image_offset)
 
 
 @flow(name="preview-enface-acquisition")
 def preview_enface_acquisition(config: PSOCTScanConfigModel, mosaic_ident: OCTMosaicId,
-                                input_dir: Path, acquisition: str):
-    return run_preview(config, mosaic_ident, input_dir, acquisition)
+                                input_dir: Path, acquisition: str, image_offset: int = 0):
+    return run_preview(config, mosaic_ident, input_dir, acquisition,
+                       image_offset=image_offset)
 
 
 def to_deployment(*, deployment_name="local", extra_tags=()):

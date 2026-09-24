@@ -33,20 +33,36 @@ with overlapping slice/tile IDs in the same watched directory.
 ## Scanner names without slice or acquisition
 
 If the scanner only numbers its output (`spectral_0001.nii`, `spectral_0002.nii`,
-...), set `"filename_pattern": "spectral_{image}.nii"` and tell the watcher which
-slice and acquisition the folder holds:
+...), set `"filename_pattern": "spectral_{image}.nii"`. The numbers are then one
+continuous sequence across mosaics and slices, and `--slice`/`--mosaic` say where
+image 1 starts (both default to 1):
 
 ```bash
-ops oct watch myproject /path/to/scanner/output --slice 3 --acquisition normal0deg
-ops oct watch myproject /path/to/scanner/output --mosaic 5   # same thing with 2 mosaics per slice
+ops oct watch myproject /path/to/scanner/output --slice 1 --mosaic 1
 ```
 
-`--acquisition` must be a key of `acquisition_mosaic_map`. `--mosaic` is the global
-source mosaic id, `(slice - 1) * mosaics_per_slice + slot`; if you pass it together
-with `--slice` or `--acquisition`, they must agree. Files the watcher cannot place
-(no slice/acquisition in the name and none on the command line) are skipped with
-a warning. Run one watcher per slice/acquisition folder, and restart it with new
-values when the scanner moves on, because image numbers repeat between mosaics.
+With 22 x 16 grids for both illuminations, that places:
+
+| Images | Slice | Mosaic |
+|---|---|---|
+| 1-352 | 1 | 1 (normal) |
+| 353-704 | 1 | 2 (tilted) |
+| 705-1056 | 2 | 1 (normal) |
+| ... | ... | ... |
+
+Each mosaic holds `grid_size_x * grid_size_y` tiles, using `grid_size_x_normal` or
+`grid_size_x_tilted` for its illumination, and its tiles are renumbered from 1. After
+the slice's last mosaic the sequence continues with mosaic 1 of the next slice.
+Placement depends only on the image number, so restarting the watcher is safe.
+
+`--mosaic` is the mosaic's position within its slice (1..`mosaics_per_slice`, e.g.
+1 = normal, 2 = tilted), not a global mosaic id. `--acquisition` may name that
+position by its `acquisition_mosaic_map` label instead; you never need both. To
+start a folder partway through, e.g. with the tilted mosaic of slice 3, pass
+`--slice 3 --mosaic 2`. `--slice-offset` still shifts the resulting slice numbers.
+
+A batch number beyond a mosaic's `grid_size_x` is never dispatched (it is logged
+and ignored), whatever the naming.
 
 When the filename already contains `{slice}`/`{acquisition}`, or uses legacy
 `mosaic_###_image_####` names, these options act as a filter: only matching files

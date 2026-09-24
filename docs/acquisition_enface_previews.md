@@ -46,13 +46,16 @@ modalities must be present for every expected tile before a candidate is ready.
 From Miniforge Prompt, with the project's venv activated and Prefect API configured:
 
 ```cmd
-opticstream oct watch human-10um D:\data\acquisition --slice 1 --acquisition normal0deg
+opticstream oct watch human-10um D:\data\acquisition --slice 1 --mosaic 1
 ```
 
 The main `oct watch` runs the previews in a background polling loop next to batch
-dispatch whenever it knows the folder's slice and mosaic (`--slice` with `--acquisition`, or
-`--mosaic`); the acquisition label is looked up from `acquisition_mosaic_map` when
-only `--mosaic` is given. Previews do not wait for batch processing (e.g. MATLAB on
+dispatch. With continuously numbered files (a `filename_pattern` without `{slice}` or
+`{acquisition}`, see oct_input_naming.md) the previews follow the same sequence:
+each mosaic's maps are the images in its range (mosaic 2 of a 22 x 16 grid starts at
+image 353), named with its `acquisition_mosaic_map` label. Preview patterns then
+need only `{image}`. Otherwise previews need the folder's slice and mosaic (`--slice`
+with `--mosaic` or `--acquisition`). Previews do not wait for batch processing (e.g. MATLAB on
 the last batch): the full-acquisition preview starts as soon as the last batch's
 maps have been stable for `--stability-seconds` (default 15), ahead of any batch
 previews still pending. A preview error is logged and never stops batch watching.

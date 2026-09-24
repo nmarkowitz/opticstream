@@ -87,10 +87,12 @@ class InputNamingTests(unittest.TestCase):
         cfg = SimpleNamespace(acquisition=self.acquisition(), mosaics_per_slice=2)
         self.assertEqual(resolve_fixed_mosaic(cfg), (None, None))
         self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, acquisition="tilted15deg"), (37, 2))
-        self.assertEqual(resolve_fixed_mosaic(cfg, mosaic=74), (37, 2))
-        self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, acquisition="tilted15deg", mosaic=74), (37, 2))
-        for kwargs in ({"acquisition": "unknown"}, {"slice_id": 36, "mosaic": 74},
-                       {"acquisition": "normal0deg", "mosaic": 74}, {"slice_id": 0}):
+        # --mosaic is the position within the slice (1 = normal, 2 = tilted).
+        self.assertEqual(resolve_fixed_mosaic(cfg, mosaic=2), (None, 2))
+        self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, mosaic=1), (37, 1))
+        self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, acquisition="tilted15deg", mosaic=2), (37, 2))
+        for kwargs in ({"acquisition": "unknown"}, {"mosaic": 3}, {"mosaic": 0},
+                       {"acquisition": "normal0deg", "mosaic": 2}, {"slice_id": 0}):
             with self.assertRaises(ValueError):
                 resolve_fixed_mosaic(cfg, **kwargs)
 

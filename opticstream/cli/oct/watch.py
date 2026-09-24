@@ -20,6 +20,7 @@ from opticstream.flows.psoct.tile_batch_process_flow import process_tile_batch
 from opticstream.flows.psoct.utils import oct_batch_ident
 from opticstream.flows.psoct.utils import (
     logical_mosaic_from_source_mosaic,
+    mosaic_context_from_ids,
     mosaic_position_in_slice,
     slice_from_mosaic,
 )
@@ -28,6 +29,8 @@ from opticstream.utils.filename_utils import (
     extract_processed_index_from_filename,
     extract_spectral_index_from_filename,
 )
+from opticstream.utils.acquisition_sequence import AcquisitionSequence
+from opticstream.utils.oct_input_naming import pattern_names_mosaic
 from opticstream.utils.polling_watcher import PollingStableWatcher
 from opticstream.utils.refresh_disk import RefreshHook, resolve_refresh_hook
 
@@ -138,8 +141,9 @@ def resolve_fixed_mosaic(
     """
     Resolve watch --slice/--acquisition/--mosaic into (slice_id, mosaic_slot).
 
-    ``mosaic`` is a global source mosaic id; ``acquisition`` is a label from
-    ``acquisition.acquisition_mosaic_map``. Values given together must agree.
+    ``mosaic`` is the mosaic's position within its slice (1..mosaics_per_slice,
+    e.g. 1 = normal, 2 = tilted); ``acquisition`` is the same position named by
+    its ``acquisition.acquisition_mosaic_map`` label. Values given together must agree.
     """
     mosaics_per_slice = scan_config.mosaics_per_slice
     slot = None
@@ -154,13 +158,14 @@ def resolve_fixed_mosaic(
     if slice_id is not None and slice_id < 1:
         raise ValueError(f"--slice must be >= 1, got {slice_id}")
     if mosaic is not None:
-        mosaic_slice = slice_from_mosaic(mosaic, mosaics_per_slice)
-        mosaic_slot = mosaic_position_in_slice(mosaic, mosaics_per_slice)
-        if slice_id is not None and slice_id != mosaic_slice:
-            raise ValueError(f"--mosaic {mosaic} belongs to slice {mosaic_slice}, not --slice {slice_id}")
-        if slot is not None and slot != mosaic_slot:
-            raise ValueError(f"--mosaic {mosaic} is slot {mosaic_slot}, but --acquisition {acquisition} is slot {slot}")
-        slice_id, slot = mosaic_slice, mosaic_slot
+        if not 1 <= mosaic <= mosaics_per_slice:
+            raise ValueError(
+                f"--mosaic is the mosaic's position within the slice (1..{mosaics_per_slice}), "
+                f"got {mosaic}; use --slice for the slice"
+            )
+        if slot is not None and slot != mosaic:
+            raise ValueError(f"--mosaic {mosaic} does not match --acquisition {acquisition} (mosaic {slot})")
+        slot = mosaic
     return slice_id, slot
 
 
@@ -206,11 +211,15 @@ class OCTWatcherService:
         prefer_spectral_for_complex_with_spectral: bool = True,
         fixed_slice_id: int | None = None,
         fixed_mosaic_slot: int | None = None,
+        sequence: AcquisitionSequence | None = None,
     ) -> None:
         self.project_name = project_name
         self.fixed_slice_id = fixed_slice_id
         self.fixed_mosaic_slot = fixed_mosaic_slot
+        # Continuous numbering: image numbers alone place tiles (see AcquisitionSequence).
+        self.sequence = sequence
         self._warned_unplaced: set[str] = set()
+        self._warned_extra_batches: set[tuple[int, int]] = set()
         self.folder_path = folder_path
         self.project_base_path = project_base_path
         self.mosaic_ranges = mosaic_ranges
@@ -280,7 +289,18 @@ class OCTWatcherService:
                     logical_batch = (image_index - 1) // self.batch_size + 1
                     batches[logical_batch].append(image_index)
 
+                max_batches = self._batches_in_mosaic(source_mosaic_id)
                 for logical_batch, batch_tile_indices in sorted(batches.items()):
+                    if logical_batch > max_batches:
+                        if (source_mosaic_id, logical_batch) not in self._warned_extra_batches:
+                            self._warned_extra_batches.add((source_mosaic_id, logical_batch))
+                            logger.warning(
+                                "Ignoring source_mosaic=%s batch %s: the grid has only %s batches",
+                                source_mosaic_id,
+                                logical_batch,
+                                max_batches,
+                            )
+                        continue
                     if len(batch_tile_indices) < self.batch_size:
                         logger.warning(
                             "Incomplete batch source_mosaic=%s logical_batch=%s (%s tiles, need %s)",
@@ -332,6 +352,14 @@ class OCTWatcherService:
 
         return out
 
+    def _batches_in_mosaic(self, source_mosaic_id: int) -> int:
+        context = mosaic_context_from_ids(
+            slice_id=slice_from_mosaic(source_mosaic_id, self.scan_config.mosaics_per_slice),
+            mosaic_id=source_mosaic_id,
+            mosaics_per_slice=self.scan_config.mosaics_per_slice,
+        )
+        return context.grid_size_x(self.scan_config)
+
     def _matches_fixed_mosaic(self, source_mosaic_id: int) -> bool:
         """Apply --slice/--acquisition/--mosaic as a filter to legacy filenames."""
         mosaics_per_slice = self.scan_config.mosaics_per_slice
@@ -365,6 +393,7 @@ class OCTWatcherService:
                     self.scan_config.mosaics_per_slice,
                     slice_id=self.fixed_slice_id,
                     mosaic_slot=self.fixed_mosaic_slot,
+                    sequence=self.sequence,
                 )
                 if custom is None:
                     continue
@@ -669,16 +698,31 @@ def build_watch_previews(
     slice_offset: int,
     stability_seconds: int,
     poll_interval: int,
+    sequence: AcquisitionSequence | None = None,
 ) -> PollingStableWatcher | None:
     """Enface preview watcher for the folder's slice/mosaic, or None when not applicable."""
     preview = scan_config.enface_preview
     if not (preview.batch_enabled or preview.acquisition_enabled):
         logger.info("Enface previews disabled in the block (batch_enabled/acquisition_enabled)")
         return None
+    if sequence is not None:
+        # Imported here: watch_enface imports this module.
+        from opticstream.cli.oct.watch_enface import build_sequence_preview_watcher
+
+        logger.info("Enface previews on; following the continuous numbering")
+        return build_sequence_preview_watcher(
+            scan_config,
+            sequence,
+            folder_path,
+            project_name,
+            slice_offset=slice_offset,
+            stability_seconds=stability_seconds,
+            poll_interval=poll_interval,
+        )
     if fixed_slice_id is None or fixed_mosaic_slot is None:
         logger.info(
             "Enface previews need the folder's slice and mosaic; pass --slice with "
-            "--acquisition, or --mosaic, to enable them"
+            "--mosaic (or --acquisition) to enable them"
         )
         return None
     if acquisition is None:
@@ -739,6 +783,7 @@ def watch_oct(
     min_complex_file_size_bytes: int = 1,
     fixed_slice_id: int | None = None,
     fixed_mosaic_slot: int | None = None,
+    sequence: AcquisitionSequence | None = None,
     companions: tuple[PollingStableWatcher, ...] = (),
 ) -> None:
     service = OCTWatcherService(
@@ -755,6 +800,7 @@ def watch_oct(
         min_complex_file_size_bytes=min_complex_file_size_bytes,
         fixed_slice_id=fixed_slice_id,
         fixed_mosaic_slot=fixed_mosaic_slot,
+        sequence=sequence,
     )
 
     watcher = PollingStableWatcher[OCTBatchCandidate, tuple[int, int]](
@@ -802,12 +848,18 @@ def watch(
       - source mosaic id is derived from processed index and grid_size_x
       - slice_offset controls logical slice numbering via derived source mosaic ids
 
-    --slice, --acquisition and --mosaic say which slice/mosaic the folder holds.
-    They fill in values missing from acquisition.filename_pattern (e.g. a block
-    pattern of "spectral_{image}.nii" with --slice 3 --acquisition normal0deg),
-    and filter files whose names already contain them. --acquisition is a label
-    from acquisition.acquisition_mosaic_map; --mosaic is a global source mosaic
-    id and can replace --slice/--acquisition.
+    --slice and --mosaic (the mosaic's position within the slice: 1 = normal,
+    2 = tilted) say where the folder starts. --acquisition may name the mosaic by
+    its acquisition.acquisition_mosaic_map label instead of --mosaic.
+
+    When acquisition.filename_pattern has no {slice} or {acquisition} (e.g.
+    "spectral_{image}.nii"), image numbers are one continuous sequence: image 1 is
+    the start mosaic (default slice 1, mosaic 1), and after that mosaic's
+    grid_size_x * grid_size_y tiles the sequence continues into the next mosaic
+    and then the next slice, each sized by its own grid.
+
+    When filenames contain {slice}/{acquisition}, the names place each tile and
+    --slice/--mosaic only filter which tiles this watcher handles.
 
     With the slice and mosaic known, a background loop also stitches enface previews
     from the acquisition's own AIP/MIP/orientation/retardance maps (block
@@ -832,8 +884,23 @@ def watch(
     fixed_slice_id, fixed_mosaic_slot = resolve_fixed_mosaic(
         scan_config, slice_id=slice, acquisition=acquisition, mosaic=mosaic
     )
-    if (fixed_slice_id, fixed_mosaic_slot) != (None, None):
-        if scan_config.mosaics_per_slice == 3 and not scan_config.acquisition.filename_pattern:
+    sequence = None
+    filename_pattern = scan_config.acquisition.filename_pattern
+    if filename_pattern and not pattern_names_mosaic(filename_pattern):
+        sequence = AcquisitionSequence(
+            scan_config,
+            start_slice=fixed_slice_id or 1,
+            start_mosaic=fixed_mosaic_slot or 1,
+        )
+        logger.info(
+            "Continuous numbering: image 1 is slice %s mosaic %s; mosaic sizes %s tiles",
+            sequence.start_slice,
+            sequence.start_mosaic,
+            sequence.sizes,
+        )
+        fixed_slice_id = fixed_mosaic_slot = None
+    elif (fixed_slice_id, fixed_mosaic_slot) != (None, None):
+        if scan_config.mosaics_per_slice == 3 and not filename_pattern:
             raise ValueError(
                 "--slice/--acquisition/--mosaic need acquisition.filename_pattern "
                 "when mosaics_per_slice == 3"
@@ -856,6 +923,7 @@ def watch(
             slice_offset=slice_offset,
             stability_seconds=stability_seconds,
             poll_interval=poll_interval,
+            sequence=sequence,
         )
         if preview_watcher is not None:
             companions = (preview_watcher,)
@@ -876,5 +944,6 @@ def watch(
         min_complex_file_size_bytes=min_complex_file_size_bytes,
         fixed_slice_id=fixed_slice_id,
         fixed_mosaic_slot=fixed_mosaic_slot,
+        sequence=sequence,
         companions=companions,
     )

@@ -35,17 +35,37 @@ class InputTile:
     modality: str
 
 
-def parse_input_name(name, acquisition, mosaics_per_slice, *, slice_id=None, mosaic_slot=None):
+def pattern_names_mosaic(pattern):
+    """True when filenames carry their own {slice} or {acquisition}."""
+    return bool({"slice", "acquisition"} & set(compile_pattern(pattern).groupindex))
+
+
+def parse_input_name(name, acquisition, mosaics_per_slice, *, slice_id=None, mosaic_slot=None,
+                     sequence=None):
     """
     Parse an input filename with the configured pattern.
 
     ``slice_id`` / ``mosaic_slot`` fill in values the filename lacks. When the
     filename also contains them, they act as filters: a mismatch returns None.
+    ``sequence`` (an AcquisitionSequence) places names with neither {slice} nor
+    {acquisition} by their continuous image number; image_index is then the tile
+    number within that mosaic.
     """
     match = compile_pattern(acquisition.filename_pattern).fullmatch(name)
     if match is None:
         return None
     values = match.groupdict()
+    if sequence is not None and "slice" not in values and "acquisition" not in values:
+        image = int(values["image"])
+        if image < 1:
+            raise ValueError("Filename image numbers must be positive.")
+        modality = acquisition.filename_modality_map.get(
+            values.get("modality", acquisition.filename_default_modality)
+        )
+        if modality is None:
+            return None
+        position = sequence.locate(image)
+        return InputTile(position.source_mosaic_id, position.tile, modality)
     slot = mosaic_slot
     if "acquisition" in values:
         slot = acquisition.acquisition_mosaic_map.get(values["acquisition"])
