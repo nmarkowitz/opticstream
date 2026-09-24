@@ -12,7 +12,11 @@ from opticstream.hooks.publish_hooks import (
 )
 from opticstream.config.psoct_scan_config import PSOCTScanConfigModel, TileSavingType
 from opticstream.events import BATCH_PROCESSED, BATCH_READY, get_event_trigger
-from opticstream.flows.psoct.tile_batch_archive_flow import archive_tile_batch
+from opticstream.flows.psoct.tile_batch_archive_flow import (
+    archive_complex_tiles,
+    archive_tile_batch,
+    emit_batch_archived,
+)
 from opticstream.flows.psoct.tile_batch_processed_validation import (
     validate_processed_batch_outputs,
 )
@@ -60,6 +64,23 @@ def _determine_processing_mode(
     raise ValueError(f"Invalid tile saving type: {tile_saving_type}")
 
 
+def complex_output_dir_for_batch(
+    config: PSOCTScanConfigModel, mode: str, slice_id: int
+) -> Path | None:
+    """``slice-NN/complex`` when this batch should save complex tiles, else None."""
+    if not config.processing.save_complex_outputs:
+        return None
+    logger = get_run_logger()
+    if mode != "spectral":
+        logger.warning("save_complex_outputs applies to spectral input only; ignoring for %s", mode)
+        return None
+    if not config.archive_path:
+        logger.warning("save_complex_outputs needs archive_path; complex tiles will not be saved")
+        return None
+    _, _, _, complex_dir = get_slice_paths(str(config.project_base_path), slice_id)
+    return complex_dir
+
+
 @task(task_run_name="spectral-to-processed-{batch_id}")
 def spectral_to_processed_tile_batch(
     batch_id: OCTBatchId,
@@ -67,6 +88,7 @@ def spectral_to_processed_tile_batch(
     *,
     config: PSOCTScanConfigModel,
     mosaic_context: MosaicContext,
+    complex_output_dir: Path | None = None,
 ) -> Path:
     logger = get_run_logger()
 
@@ -76,6 +98,7 @@ def spectral_to_processed_tile_batch(
     pipeline_opts = build_pipeline_opts(
         config=config,
         illumination=mosaic_context.config_illumination,
+        complex_output_dir=str(complex_output_dir) if complex_output_dir else None,
     )
     cmd = build_spectral2processed_batch_indexed_command(
         [str(ref.spectral_file_path) for ref in file_reference_list],
@@ -240,6 +263,13 @@ def process_tile_batch(
     file_reference_list = list(file_reference_list.values())
 
     logger.info("File reference list: %s", file_reference_list)
+    mode = _determine_processing_mode(
+        tile_saving_type=config.acquisition.tile_saving_type,
+    )
+    # Complex tiles join the raw tiles in one BATCH_ARCHIVED event (one DANDI upload).
+    complex_dir = complex_output_dir_for_batch(config, mode, batch_id.slice_id)
+    save_complex = complex_dir is not None
+
     archive_future = None
     if config.archive_path:
         archive_future = archive_tile_batch.submit(
@@ -249,11 +279,9 @@ def process_tile_batch(
             archive_path=config.archive_path,
             archive_tile_name_format=config.archive_tile_name_format,
             force_rerun=force_rerun,
+            emit_event=not save_complex,
         )
 
-    mode = _determine_processing_mode(
-        tile_saving_type=config.acquisition.tile_saving_type,
-    )
     processed_path: Path | None = None
     if mode == "spectral":
         processed_path = spectral_to_processed_tile_batch(
@@ -261,6 +289,7 @@ def process_tile_batch(
             file_reference_list=file_reference_list,
             config=config,
             mosaic_context=mosaic_context,
+            complex_output_dir=complex_dir,
         )
     elif mode == "complex":
         processed_path = complex_to_processed_tile_batch(
@@ -278,7 +307,18 @@ def process_tile_batch(
         )
     
 
-    if archive_future:
+    if archive_future and save_complex:
+        raw_archived = archive_future.result()
+        complex_archived = archive_complex_tiles(
+            batch_id=batch_id,
+            file_reference_list=file_reference_list,
+            acquisition_label=mosaic_context.acquisition_label,
+            archive_path=config.archive_path,
+            complex_tile_name_format=config.complex_tile_name_format,
+            complex_dir=complex_dir,
+        )
+        emit_batch_archived(batch_id, raw_archived + complex_archived)
+    elif archive_future:
         archive_future.wait()
     with OCT_STATE_SERVICE.open_batch(batch_ident=batch_id) as batch_state:
         batch_state.mark_completed()

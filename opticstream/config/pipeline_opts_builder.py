@@ -22,13 +22,17 @@ from opticstream.config.psoct_scan_config import PSOCTScanConfigModel, TileSavin
 
 
 class VolumeOutputOpts(OutputOpts):
-    """Extra flag consumed by OpticStream's bundled indexed batch wrappers."""
+    """Extra fields consumed by OpticStream's bundled indexed batch wrappers."""
 
     save_volume_outputs: bool = True
+    # Directory for per-tile complex volumes (<prefix>_complex.nii); None keeps them in memory.
+    complex_output_dir: Optional[str] = None
 
     def to_matlab_struct(self):
         result = super().to_matlab_struct()
         result["SaveVolumeOutputs"] = self.save_volume_outputs
+        if self.complex_output_dir:
+            result["ComplexOutputDir"] = self.complex_output_dir
         return result
 
 
@@ -49,6 +53,7 @@ def build_pipeline_opts(
     illumination: str = "normal",
     output_opts: Optional[OutputOpts] = None,
     opts_mat_file: Optional[str] = None,
+    complex_output_dir: Optional[str] = None,
 ) -> PipelineOpts:
     """
     Assemble MATLAB-facing PipelineOpts from project scan config.
@@ -63,6 +68,8 @@ def build_pipeline_opts(
         Per-run output paths; omit to let MATLAB fill defaults.
     opts_mat_file
         Optional path to opts .mat cache.
+    complex_output_dir
+        Save each tile's complex volume here (spectral input only).
     """
     acq = config.acquisition
     proc = config.processing
@@ -124,8 +131,10 @@ def build_pipeline_opts(
     surface = SurfaceOpts(spec=proc.surface_spec)
 
     output_opts = VolumeOutputOpts(
-        **(output_opts.model_dump(exclude={"save_volume_outputs"}) if output_opts else {}),
+        **(output_opts.model_dump(exclude={"save_volume_outputs", "complex_output_dir"})
+           if output_opts else {}),
         save_volume_outputs=proc.save_volume_outputs,
+        complex_output_dir=complex_output_dir,
     )
 
     return PipelineOpts(

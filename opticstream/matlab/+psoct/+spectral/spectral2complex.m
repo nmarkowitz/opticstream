@@ -212,9 +212,13 @@ if outputPath ~= ""
 
     fprintf('Saving output to: %s\n', outputPath);
     Jstack_all = single(Jstack_all);
+    % The template is usually the spectral input's header, whose size differs
+    % from the complex stack; resize it as the toolbox does for volume outputs
+    % (default 10x10x2.5 um voxels).
+    infoComplex = psoct.internal.nifti.shrinkNiftiHeader(Jstack_all, outputOpts.InfoLike);
     futures = {};
     futures = psoct.internal.nifti.appendWriteFuture(futures, ...
-        psoct.internal.nifti.writeNiftiIfPath(outputPath, Jstack_all, outputOpts.InfoLike));
+        psoct.internal.nifti.writeNiftiIfPath(outputPath, Jstack_all, infoComplex));
     psoct.internal.nifti.waitWriteFutures(futures);
 end
 

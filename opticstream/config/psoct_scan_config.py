@@ -211,6 +211,17 @@ class PSOCTProcessingParams(BaseModel):
                      "Existing files are not deleted; raw archives and enface workflows are unaffected."),
     )
 
+    save_complex_outputs: bool = Field(
+        default=False,
+        description=("Spectral input only: save each tile's complex (Jones) volume that "
+                     "spectral2complex computes, then archive it with complex_tile_name_format "
+                     "next to the raw tiles and upload it to DANDI with them. About 2x the size "
+                     "of the spectral tile (~1.1 GB per 350x350 tile with 1152 samples). "
+                     "Needs archive_path. The archived/uploaded copies are gzipped (.nii.gz) and "
+                     "kept; the uncompressed slice-NN/complex copy is deleted once its gzipped "
+                     "archive copy is validated."),
+    )
+
     disp_comp_file: Path | None = Field(
         default=None,
         description=(
@@ -376,6 +387,17 @@ class PSOCTScanConfigModel(BaseModel):
         ),
         description=(
             "Filename template for archived tile outputs "
+            "(supports placeholders: project_name, slice_id, tile_id, acq)"
+        ),
+    )
+    complex_tile_name_format: str = Field(
+        default=(
+            "{project_name}_sample-slice{slice_id:02d}_chunk-{tile_id:04d}_acq-{acq}"
+            "_desc-complex_OCT.nii.gz"
+        ),
+        description=(
+            "Filename template for archived complex tiles when "
+            "processing.save_complex_outputs is true "
             "(supports placeholders: project_name, slice_id, tile_id, acq)"
         ),
     )

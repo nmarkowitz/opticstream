@@ -73,6 +73,7 @@ if ~isempty(numWorkers) && numWorkers == 1
             fprintf("spectral2processed_batch_indexed: %s -> %s_*\n", inFile, prefix);
 
             perOutputOpts = psoct.file.internal.applyVolumeOutputPolicy(perOutputOpts);
+            perOutputOpts = psoct.file.internal.applyComplexOutputPolicy(perOutputOpts, prefix);
             psoct.file.spectral2processed( ...
                 inFile, spectralOpts, surfaceOpts, enfaceOpts, ...
                 acquisitionOpts, perOutputOpts, volumeOpts, optsMatFile);
@@ -107,6 +108,7 @@ parfor idx = 1:numel(files)
         fprintf("spectral2processed_batch_indexed: %s -> %s_*\n", inFile, prefix);
 
         perOutputOpts = psoct.file.internal.applyVolumeOutputPolicy(perOutputOpts);
+        perOutputOpts = psoct.file.internal.applyComplexOutputPolicy(perOutputOpts, prefix);
         psoct.file.spectral2processed( ...
             inFile, spectralOpts, surfaceOpts, enfaceOpts, ...
             acquisitionOpts, perOutputOpts, volumeOpts, optsMatFile);

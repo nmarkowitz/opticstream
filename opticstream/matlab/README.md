@@ -29,3 +29,11 @@ Orientation helpers (top level, unpackaged, from chaos_scientific_report_scripts
 - tensor2angle.m: orientation tensor -> angle in radians.
 psoct.registration.thruplane_registration calls both, unqualified, to warp
 orientation maps; the toolbox does not ship them.
+
+Complex outputs (processing.save_complex_outputs):
+- The indexed spectral batch wrapper reads OutputOpts.ComplexOutputDir
+  (+psoct/+file/+internal/applyComplexOutputPolicy.m) and sets Paths.complex to
+  <dir>/<prefix>_complex.nii, so spectral2complex saves the volume it already computes.
+- The file is single, [4*A-lines, B-lines, depth]: real(J1), imag(J1), real(J2),
+  imag(J2) stacked along the first axis. Its header is resized from the spectral
+  input's (default 10x10x2.5 um voxels) because that header's size differs.
