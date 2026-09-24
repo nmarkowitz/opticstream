@@ -287,6 +287,13 @@ def stitch_volume_flow(
         with OCT_STATE_SERVICE.open_mosaic(mosaic_ident=mosaic_ident) as mosaic_state:
             mosaic_state.mark_completed()
         return {}
+    if not config.stitch_3d_volumes:
+        logger.info(
+            f"Skipping volume stitching for mosaic {mosaic_ident} as stitch_3d_volumes is disabled"
+        )
+        with OCT_STATE_SERVICE.open_mosaic(mosaic_ident=mosaic_ident) as mosaic_state:
+            mosaic_state.mark_completed()
+        return {}
     if should_skip_run(
         enter_milestone_stage(
             item_state_view=OCT_STATE_SERVICE.peek_mosaic(mosaic_ident=mosaic_ident),
@@ -295,13 +302,6 @@ def stitch_volume_flow(
             force_rerun=force_rerun,
         )
     ):
-        with OCT_STATE_SERVICE.open_mosaic(mosaic_ident=mosaic_ident) as mosaic_state:
-            mosaic_state.mark_completed()
-        return {}
-    if not config.stitch_3d_volumes:
-        logger.info(
-            f"Skipping volume stitching for mosaic {mosaic_ident} as stitch_3d_volumes is disabled"
-        )
         with OCT_STATE_SERVICE.open_mosaic(mosaic_ident=mosaic_ident) as mosaic_state:
             mosaic_state.mark_completed()
         return {}

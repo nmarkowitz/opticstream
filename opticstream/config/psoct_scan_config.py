@@ -63,7 +63,9 @@ class PSOCTAcquisitionParams(BaseModel):
             "Optional full input filename template; null preserves legacy naming. "
             "Example: sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acquisition}_{modality}{extension}. "
             "slice037/chunk-0041/acq-normal0deg means slice 37, image 41, and the mosaic slot mapped from normal0deg. "
-            "Required placeholders: {slice}, {image}, {acquisition}; optional: {subject}, {modality}, {extension}. "
+            "Required placeholder: {image}; optional: {slice}, {acquisition}, {subject}, {modality}, {extension}. "
+            "Without {slice}/{acquisition} (e.g. spectral_{image}.nii), pass them to `ops oct watch` "
+            "via --slice and --acquisition (or --mosaic). "
             "Numbers accept zero padding; do not use :04d format specifiers. Literals and labels are case-sensitive. "
             "Suffixes/extensions may be literals or placeholders; matching an extension does not add support for its file format."
         ),
@@ -420,7 +422,13 @@ class PSOCTScanConfigModel(BaseModel):
 
     stitch_3d_volumes: bool = Field(
         default=True,
-        description="Enable stitching of 3D volume outputs",
+        description=(
+            "Enable 3D mosaic volume stitching (including focus finding) and "
+            "mosaic volume uploads. When false, both are skipped without setting "
+            "volume milestones or emitting volume events. Per-tile volumes are "
+            "still saved (see processing.save_volume_outputs); enface workflows "
+            "are unaffected."
+        ),
     )
 
     crop_focus_plane_depth: int = Field(

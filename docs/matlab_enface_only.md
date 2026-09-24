@@ -17,8 +17,10 @@ Slice registration remains enabled; this setting controls reconstructed tile
 volumes and their mosaic outputs, not registration-derived orientation products.
 
 `processing.save_enface_2d_as_3d` is independent: false stores enface maps as 2D
-NIfTI instead of X-by-Y-by-1. `stitch_3d_volumes` remains an independent switch;
-enabling volume saving does not override disabled stitching.
+NIfTI instead of X-by-Y-by-1. `stitch_3d_volumes` (default `true`) is an
+independent switch: set it to `false` to keep saving per-tile volumes but skip
+mosaic volume stitching (including focus finding) and mosaic volume uploads.
+Enabling volume saving does not override disabled stitching.
 
 ## Enable for an existing block
 

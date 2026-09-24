@@ -15,10 +15,11 @@ from opticstream.flows.psoct.tile_file_reference import TileFileReference
 from opticstream.state.oct_project_state import OCTMosaicId
 
 
-def config(tmp_path, enabled):
+def config(tmp_path, enabled, stitch_3d_volumes=True):
     return PSOCTScanConfigModel(project_name="test", project_base_path=tmp_path,
         acquisition=dict(grid_size_x_normal=1, grid_size_x_tilted=1, grid_size_y=1),
-        processing=dict(save_volume_outputs=enabled), enface_modalities=["aip"], zarr_config=ZarrConfig())
+        processing=dict(save_volume_outputs=enabled), enface_modalities=["aip"], zarr_config=ZarrConfig(),
+        stitch_3d_volumes=stitch_3d_volumes)
 
 
 def _check_command_flag_and_enface_validation(tmp_path, enabled):
@@ -44,9 +45,8 @@ def _check_existing_blocks_default_enabled():
     assert PSOCTProcessingParams.model_validate({}).save_volume_outputs is True
 
 
-def _check_disabled_upload_skips_all_milestones(tmp_path):
+def _check_disabled_upload_skips_all_milestones(tmp_path, cfg):
     from opticstream.flows.psoct.mosaic_volume_upload_flow import upload_mosaic_volume_to_dandi_flow
-    cfg = config(tmp_path, False)
     with patch("opticstream.utils.volume_settings.get_psoct_scan_config", return_value=cfg), \
          patch("opticstream.state.milestone_wrappers_psoct.OCT_STATE_SERVICE") as state, \
          patch("opticstream.flows.psoct.mosaic_volume_upload_flow.upload_to_dandi_batch") as upload:
@@ -57,7 +57,7 @@ def _check_disabled_upload_skips_all_milestones(tmp_path):
         upload.assert_not_called()
 
 
-def _check_disabled_stitch_skips_before_volume_milestone(tmp_path):
+def _check_disabled_stitch_skips_before_volume_milestone(tmp_path, cfg):
     from opticstream.flows.psoct import mosaic_volume_stitch_flow as module
     @contextmanager
     def opened(**kwargs):
@@ -67,7 +67,7 @@ def _check_disabled_stitch_skips_before_volume_milestone(tmp_path):
          patch.object(module, "enter_milestone_stage") as enter, \
          patch.object(module, "emit_mosaic_psoct_event") as emit:
         result = module.stitch_volume_flow.fn(
-            mosaic_ident=OCTMosaicId(project_name="test", slice_id=1, mosaic_id=1), config=config(tmp_path, False))
+            mosaic_ident=OCTMosaicId(project_name="test", slice_id=1, mosaic_id=1), config=cfg)
         assert result == {}
         enter.assert_not_called()
         emit.assert_not_called()
@@ -84,8 +84,22 @@ class VolumeOutputTests(unittest.TestCase):
 
     def test_upload(self):
         with TemporaryDirectory() as folder:
-            _check_disabled_upload_skips_all_milestones(Path(folder))
+            _check_disabled_upload_skips_all_milestones(Path(folder), config(Path(folder), False))
 
     def test_stitch(self):
         with TemporaryDirectory() as folder:
-            _check_disabled_stitch_skips_before_volume_milestone(Path(folder))
+            _check_disabled_stitch_skips_before_volume_milestone(Path(folder), config(Path(folder), False))
+
+    def test_stitch_3d_volumes_disabled_skips_upload(self):
+        with TemporaryDirectory() as folder:
+            cfg = config(Path(folder), True, stitch_3d_volumes=False)
+            _check_disabled_upload_skips_all_milestones(Path(folder), cfg)
+
+    def test_stitch_3d_volumes_disabled_skips_stitch(self):
+        with TemporaryDirectory() as folder:
+            cfg = config(Path(folder), True, stitch_3d_volumes=False)
+            _check_disabled_stitch_skips_before_volume_milestone(Path(folder), cfg)
+
+    def test_stitch_3d_volumes_default_enabled(self):
+        with TemporaryDirectory() as folder:
+            self.assertTrue(config(Path(folder), True).stitch_3d_volumes)

@@ -41,7 +41,8 @@ class InputNamingTests(unittest.TestCase):
 
     def test_validation_and_legacy_default(self):
         self.assertIsNone(self.acquisition().filename_pattern)
-        for pattern in ("{image}", "{slice}_{image}_{acquisition}_{unknown}", "{slice}_{image}_{image}_{acquisition}"):
+        self.assertEqual(self.acquisition(filename_pattern="spectral_{image}.nii").filename_pattern, "spectral_{image}.nii")
+        for pattern in ("{slice}_{acquisition}.nii", "{slice}_{image}_{acquisition}_{unknown}", "{slice}_{image}_{image}_{acquisition}"):
             with self.assertRaises(ValueError):
                 self.acquisition(filename_pattern=pattern)
 
@@ -61,6 +62,59 @@ class InputNamingTests(unittest.TestCase):
                 candidates = watcher.discover_candidates()
                 self.assertEqual(len(candidates), 1)
                 self.assertEqual(candidates[0].source_mosaic_id, mosaic)
+
+    def test_image_only_pattern_uses_supplied_slice_and_acquisition(self):
+        acq = self.acquisition(filename_pattern="spectral_{image}.nii")
+        parsed = parse_input_name("spectral_0041.nii", acq, 2)
+        self.assertEqual((parsed.source_mosaic_id, parsed.image_index, parsed.modality), (None, 41, "spectral"))
+        parsed = parse_input_name("spectral_0041.nii", acq, 2, slice_id=37, mosaic_slot=2)
+        self.assertEqual((parsed.source_mosaic_id, parsed.image_index), (74, 41))
+        config = SimpleNamespace(acquisition=acq, mosaics_per_slice=2)
+        context = SimpleNamespace(grid_size_x=lambda cfg: 50)
+        path = Path("spectral_0041.nii")
+        refs = build_tile_file_reference_list([path], config=config, mosaic_context=context)
+        self.assertEqual(refs[41].spectral_file_path, path)
+
+    def test_supplied_values_filter_full_pattern(self):
+        acq = self.acquisition(filename_pattern=PATTERN)
+        name = "sub-X_sample-slice037_chunk-0041_acq-normal0deg_spectral.nii"
+        self.assertEqual(parse_input_name(name, acq, 2, slice_id=37, mosaic_slot=1).source_mosaic_id, 73)
+        self.assertIsNone(parse_input_name(name, acq, 2, slice_id=38))
+        self.assertIsNone(parse_input_name(name, acq, 2, mosaic_slot=2))
+
+    def test_resolve_fixed_mosaic(self):
+        from opticstream.cli.oct.watch import resolve_fixed_mosaic
+        cfg = SimpleNamespace(acquisition=self.acquisition(), mosaics_per_slice=2)
+        self.assertEqual(resolve_fixed_mosaic(cfg), (None, None))
+        self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, acquisition="tilted15deg"), (37, 2))
+        self.assertEqual(resolve_fixed_mosaic(cfg, mosaic=74), (37, 2))
+        self.assertEqual(resolve_fixed_mosaic(cfg, slice_id=37, acquisition="tilted15deg", mosaic=74), (37, 2))
+        for kwargs in ({"acquisition": "unknown"}, {"slice_id": 36, "mosaic": 74},
+                       {"acquisition": "normal0deg", "mosaic": 74}, {"slice_id": 0}):
+            with self.assertRaises(ValueError):
+                resolve_fixed_mosaic(cfg, **kwargs)
+
+    def _watcher(self, folder, pattern, **fixed):
+        return OCTWatcherService(project_name="test", folder_path=Path(folder),
+            project_base_path=folder, mosaic_ranges=[(1, 100)], slice_offset=0,
+            batch_size=1, scan_config=SimpleNamespace(acquisition=self.acquisition(filename_pattern=pattern), mosaics_per_slice=2),
+            direct=True, force_resend=False, **fixed)
+
+    def test_watcher_image_only_names(self):
+        with TemporaryDirectory() as folder:
+            (Path(folder) / "spectral_0041.nii").write_bytes(b"\0" * (100 * 1024))
+            self.assertEqual(self._watcher(folder, "spectral_{image}.nii")._discover_two_mosaic_files(), [])
+            watcher = self._watcher(folder, "spectral_{image}.nii", fixed_slice_id=37, fixed_mosaic_slot=1)
+            candidates = watcher.discover_candidates()
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual((candidates[0].source_mosaic_id, candidates[0].logical_batch), (73, 41))
+
+    def test_watcher_filters_legacy_names(self):
+        with TemporaryDirectory() as folder:
+            for mosaic in (1, 2):
+                (Path(folder) / f"mosaic_{mosaic:03d}_image_0041_spectral_0041.nii").write_bytes(b"\0" * (100 * 1024))
+            files = self._watcher(folder, None, fixed_slice_id=1, fixed_mosaic_slot=2)._discover_two_mosaic_files()
+            self.assertEqual([f.source_mosaic_id for f in files], [2])
 
 
 if __name__ == "__main__":

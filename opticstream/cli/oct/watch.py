@@ -20,6 +20,7 @@ from opticstream.flows.psoct.tile_batch_process_flow import process_tile_batch
 from opticstream.flows.psoct.utils import oct_batch_ident
 from opticstream.flows.psoct.utils import (
     logical_mosaic_from_source_mosaic,
+    mosaic_position_in_slice,
     slice_from_mosaic,
 )
 from opticstream.state.oct_project_state import OCT_STATE_SERVICE
@@ -127,6 +128,42 @@ def _parse_mosaic_ranges(mosaic_ranges_str: str) -> list[tuple[int, int]]:
     return out
 
 
+def resolve_fixed_mosaic(
+    scan_config: PSOCTScanConfigModel,
+    *,
+    slice_id: int | None = None,
+    acquisition: str | None = None,
+    mosaic: int | None = None,
+) -> tuple[int | None, int | None]:
+    """
+    Resolve watch --slice/--acquisition/--mosaic into (slice_id, mosaic_slot).
+
+    ``mosaic`` is a global source mosaic id; ``acquisition`` is a label from
+    ``acquisition.acquisition_mosaic_map``. Values given together must agree.
+    """
+    mosaics_per_slice = scan_config.mosaics_per_slice
+    slot = None
+    if acquisition is not None:
+        mosaic_map = scan_config.acquisition.acquisition_mosaic_map
+        if acquisition not in mosaic_map:
+            raise ValueError(
+                f"Unknown acquisition {acquisition!r}; expected one of {sorted(mosaic_map)} "
+                "(acquisition.acquisition_mosaic_map)"
+            )
+        slot = mosaic_map[acquisition]
+    if slice_id is not None and slice_id < 1:
+        raise ValueError(f"--slice must be >= 1, got {slice_id}")
+    if mosaic is not None:
+        mosaic_slice = slice_from_mosaic(mosaic, mosaics_per_slice)
+        mosaic_slot = mosaic_position_in_slice(mosaic, mosaics_per_slice)
+        if slice_id is not None and slice_id != mosaic_slice:
+            raise ValueError(f"--mosaic {mosaic} belongs to slice {mosaic_slice}, not --slice {slice_id}")
+        if slot is not None and slot != mosaic_slot:
+            raise ValueError(f"--mosaic {mosaic} is slot {mosaic_slot}, but --acquisition {acquisition} is slot {slot}")
+        slice_id, slot = mosaic_slice, mosaic_slot
+    return slice_id, slot
+
+
 @dataclass(frozen=True)
 class ParsedTileFile:
     path: Path
@@ -167,8 +204,13 @@ class OCTWatcherService:
         refresh_hook: RefreshHook | None = None,
         min_complex_file_size_bytes: int = 1,
         prefer_spectral_for_complex_with_spectral: bool = True,
+        fixed_slice_id: int | None = None,
+        fixed_mosaic_slot: int | None = None,
     ) -> None:
         self.project_name = project_name
+        self.fixed_slice_id = fixed_slice_id
+        self.fixed_mosaic_slot = fixed_mosaic_slot
+        self._warned_unplaced: set[str] = set()
         self.folder_path = folder_path
         self.project_base_path = project_base_path
         self.mosaic_ranges = mosaic_ranges
@@ -290,6 +332,19 @@ class OCTWatcherService:
 
         return out
 
+    def _matches_fixed_mosaic(self, source_mosaic_id: int) -> bool:
+        """Apply --slice/--acquisition/--mosaic as a filter to legacy filenames."""
+        mosaics_per_slice = self.scan_config.mosaics_per_slice
+        if self.fixed_slice_id is not None and (
+            slice_from_mosaic(source_mosaic_id, mosaics_per_slice) != self.fixed_slice_id
+        ):
+            return False
+        if self.fixed_mosaic_slot is not None and (
+            mosaic_position_in_slice(source_mosaic_id, mosaics_per_slice) != self.fixed_mosaic_slot
+        ):
+            return False
+        return True
+
     def _discover_two_mosaic_files(self) -> list[ParsedTileFile]:
         logger.debug("_discover_two_mosaic_files: scanning all tile files")
         out: list[ParsedTileFile] = []
@@ -304,9 +359,25 @@ class OCTWatcherService:
             parsed: ParsedTileFile | None = None
             if getattr(self.scan_config.acquisition, "filename_pattern", None):
                 from opticstream.utils.oct_input_naming import parse_input_name
-                custom = parse_input_name(path.name, self.scan_config.acquisition, self.scan_config.mosaics_per_slice)
-                if custom is not None:
-                    out.append(ParsedTileFile(path=path, source_mosaic_id=custom.source_mosaic_id, image_index=custom.image_index))
+                custom = parse_input_name(
+                    path.name,
+                    self.scan_config.acquisition,
+                    self.scan_config.mosaics_per_slice,
+                    slice_id=self.fixed_slice_id,
+                    mosaic_slot=self.fixed_mosaic_slot,
+                )
+                if custom is None:
+                    continue
+                if custom.source_mosaic_id is None:
+                    if path.name not in self._warned_unplaced:
+                        self._warned_unplaced.add(path.name)
+                        logger.warning(
+                            "Cannot place %s: filename has no slice/acquisition; "
+                            "pass --slice with --acquisition, or --mosaic",
+                            path.name,
+                        )
+                    continue
+                out.append(ParsedTileFile(path=path, source_mosaic_id=custom.source_mosaic_id, image_index=custom.image_index))
                 continue
             for parser in (
                 self._parse_complex_file,
@@ -319,7 +390,8 @@ class OCTWatcherService:
                     break
 
             if parsed is not None:
-                out.append(parsed)
+                if self._matches_fixed_mosaic(parsed.source_mosaic_id):
+                    out.append(parsed)
             else:
                 logger.debug("File did not match any tile pattern: %s", path.name)
 
@@ -483,7 +555,13 @@ class OCTWatcherService:
     def _image_index_from_file(self, path: Path) -> int:
         if getattr(self.scan_config.acquisition, "filename_pattern", None):
             from opticstream.utils.oct_input_naming import parse_input_name
-            custom = parse_input_name(path.name, self.scan_config.acquisition, self.scan_config.mosaics_per_slice)
+            custom = parse_input_name(
+                path.name,
+                self.scan_config.acquisition,
+                self.scan_config.mosaics_per_slice,
+                slice_id=self.fixed_slice_id,
+                mosaic_slot=self.fixed_mosaic_slot,
+            )
             if custom is None:
                 raise ValueError(f"Filename does not match configured input naming: {path.name}")
             return custom.image_index
@@ -595,6 +673,8 @@ def watch_oct(
     force_resend: bool = False,
     refresh_hook: RefreshHook | None = None,
     min_complex_file_size_bytes: int = 1,
+    fixed_slice_id: int | None = None,
+    fixed_mosaic_slot: int | None = None,
 ) -> None:
     service = OCTWatcherService(
         project_name=project_name,
@@ -608,6 +688,8 @@ def watch_oct(
         force_resend=force_resend,
         refresh_hook=refresh_hook,
         min_complex_file_size_bytes=min_complex_file_size_bytes,
+        fixed_slice_id=fixed_slice_id,
+        fixed_mosaic_slot=fixed_mosaic_slot,
     )
 
     watcher = PollingStableWatcher[OCTBatchCandidate, tuple[int, int]](
@@ -635,6 +717,9 @@ def watch(
     refresh: str | None = None,
     force_resend: bool = False,
     min_complex_file_size_bytes: int = 1,
+    slice: int | None = None,
+    acquisition: str | None = None,
+    mosaic: int | None = None,
     verbose: bool = False,
 ) -> None:
     """
@@ -650,6 +735,13 @@ def watch(
       - discovery is from processed-index files (e.g. spectral/processed_<i>.nii)
       - source mosaic id is derived from processed index and grid_size_x
       - slice_offset controls logical slice numbering via derived source mosaic ids
+
+    --slice, --acquisition and --mosaic say which slice/mosaic the folder holds.
+    They fill in values missing from acquisition.filename_pattern (e.g. a block
+    pattern of "spectral_{image}.nii" with --slice 3 --acquisition normal0deg),
+    and filter files whose names already contain them. --acquisition is a label
+    from acquisition.acquisition_mosaic_map; --mosaic is a global source mosaic
+    id and can replace --slice/--acquisition.
     """
     _configure_logging(verbose)
 
@@ -666,6 +758,17 @@ def watch(
         raise ValueError(f"Watch directory {watch_path} is not readable")
 
     refresh_hook = resolve_refresh_hook(refresh)
+
+    fixed_slice_id, fixed_mosaic_slot = resolve_fixed_mosaic(
+        scan_config, slice_id=slice, acquisition=acquisition, mosaic=mosaic
+    )
+    if (fixed_slice_id, fixed_mosaic_slot) != (None, None):
+        if scan_config.mosaics_per_slice == 3 and not scan_config.acquisition.filename_pattern:
+            raise ValueError(
+                "--slice/--acquisition/--mosaic need acquisition.filename_pattern "
+                "when mosaics_per_slice == 3"
+            )
+        logger.info("Using slice=%s mosaic_slot=%s from command line", fixed_slice_id, fixed_mosaic_slot)
 
     logger.info("Using batch_size=%s", batch_size)
     logger.info("Using mosaics_per_slice=%s", scan_config.mosaics_per_slice)
@@ -685,4 +788,6 @@ def watch(
         force_resend=force_resend,
         refresh_hook=refresh_hook,
         min_complex_file_size_bytes=min_complex_file_size_bytes,
+        fixed_slice_id=fixed_slice_id,
+        fixed_mosaic_slot=fixed_mosaic_slot,
     )

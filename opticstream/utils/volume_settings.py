@@ -17,6 +17,9 @@ def volume_output_upload_enabled(func):
         if not config.processing.save_volume_outputs:
             get_logger(__name__).info("Volume output disabled for %s; skipping volume upload", ident.project_name)
             return {"uploaded": 0}
+        if not config.stitch_3d_volumes:
+            get_logger(__name__).info("3D volume stitching disabled for %s; skipping volume upload", ident.project_name)
+            return {"uploaded": 0}
         return func(*args, **kwargs)
 
     return wrapper
