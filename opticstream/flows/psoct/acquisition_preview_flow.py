@@ -179,41 +179,61 @@ def save_progress(path, progress):
             time.sleep(0.1 * (attempt + 1))
 
 
-def tile_position(index, rows, shape, overlap, traversal, batch_id=None, *, order=None, columns=None):
-    """Map acquisition sequence to linc-convert grid coordinates.
+def tile_shape(path):
+    """In-plane (x, y) size of an enface tile, from the NIfTI header when possible."""
+    # Treat only the final extension as a format indicator; acquisition labels
+    # may contain dots (e.g. tilted12.5deg).
+    if path.name.lower().endswith((".nii", ".nii.gz")):
+        shape = nib.load(path).shape
+    else:
+        from opticstream.data_processing.qc.convert_image import load_data
+        shape = np.shape(load_data(input_path=path, mat_variable=None))
+    if len(shape) < 2 or any(size != 1 for size in shape[2:]):
+        raise ValueError(f"Expected 2D enface map (or singleton trailing axes): {path}, {shape}")
+    return tuple(shape[:2])
 
-    rows is the historical tiles-per-batch setting, not the physical Y extent
-    in row-first mode. columns is the number of batches for the full acquisition.
+
+def tile_config(config, files, shape, overlap, out):
+    """Write a linc-convert tile YAML for ``files`` (acquisition index -> path).
+
+    The full grid comes from linc-convert's generate_tile_config; entries are then
+    limited to ``files`` (a single batch keeps the direction its strip has in the
+    full snake), pointed at the resolved paths, and shifted to start at (0, 0).
     """
-    row_based = traversal in {"row-by-row", "snake-by-rows"}
-    order = order or ("right-down" if row_based else "down-right")
-    from opticstream.config.enface_preview import PreviewGridConfig
-    PreviewGridConfig(grid_type=traversal, order=order)
-    strip, fast = divmod(index, rows)
-    slow = strip
-    count = columns if columns is not None else strip + 1
-    initial, subsequent = order.split("-")
-    reverse_fast = initial in {"left", "up"}
-    if traversal.startswith("snake-") and strip % 2:
-        reverse_fast = not reverse_fast
-    if reverse_fast:
-        fast = rows - 1 - fast
-    if subsequent in {"left", "up"}:
-        slow = count - 1 - slow
-    if batch_id is not None:
-        slow = 0
-    column, row = (fast, slow) if row_based else (slow, fast)
-    return round(column * shape[0] * (1 - overlap)), round(row * shape[1] * (1 - overlap))
+    from linc_convert.modalities.psoct.generate_tile_config import generate_tile_config
+
+    grid = config.enface_preview.grid_config
+    per_strip = config.acquisition.grid_size_y
+    strips = max(files) // per_strip + 1
+    row_based = grid.grid_type in {"row-by-row", "snake-by-rows"}
+    columns, rows = (per_strip, strips) if row_based else (strips, per_strip)
+    generate_tile_config(columns=columns, rows=rows, tile_size_x=shape[0], tile_size_y=shape[1],
+                         base_dir="", naming_format="{tile_number}", grid_type=grid.grid_type,
+                         order=grid.order, overlap_percentage=overlap, out=str(out))
+    spec = yaml.safe_load(Path(out).read_text())
+    tiles = [tile for tile in spec["tiles"] if tile["tile_number"] - 1 in files]
+    x0 = min(tile["x"] for tile in tiles)
+    y0 = min(tile["y"] for tile in tiles)
+    for tile in tiles:
+        index = tile["tile_number"] - 1
+        # Round like pixel offsets; mosaic2d truncates, so 20.999... would become 20.
+        tile.update(filepath=str(files[index]), tile_number=index + 1,
+                    x=round(tile["x"] - x0), y=round(tile["y"] - y0))
+    spec["tiles"] = tiles
+    spec["metadata"].update(base_dir="", scan_resolution=list(config.acquisition.scan_resolution_3d[:2]))
+    Path(out).write_text(yaml.safe_dump(spec))
+    return out
 
 
 @task
 def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path],
                             modality: str, output: Path, batch_id: int | None = None) -> Path:
-    """Normalize singleton NIfTI maps to 2D then call linc-convert mosaic2d.
+    """Stitch acquisition tiles in place with linc-convert generate_tile_config + mosaic2d.
 
-    Temporary files leave acquisition originals untouched and prevent linc-convert
-    from silently skipping unreadable inputs. TIFF and other formats accepted by
-    the existing QC loader can also be used through configurable suffixes.
+    Writes ``output`` (NIfTI), a JPEG next to it, and a ``*_grid.jpg`` tile diagram.
+    Tiles are copied to a scratch directory only when they need converting:
+    radian orientation maps (linc-convert expects degrees) and plain 2D maps
+    (mosaic2d writes 3D voxel sizes, so tiles keep a singleton third axis).
     """
     from opticstream.data_processing.qc.convert_image import load_data
     from linc_convert.modalities.psoct.mosaic import mosaic2d
@@ -222,41 +242,39 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
     if not 0 <= overlap < 1:
         raise ValueError("Preview tile_overlap must be a percentage in [0, 100)")
     output.parent.mkdir(parents=True, exist_ok=True)
-    shape = None
+    shapes = {index: tile_shape(path) for index, path in files.items()}
+    shape = next(iter(shapes.values()))
+    for index, other in shapes.items():
+        if other != shape:
+            raise ValueError(f"Tile dimensions differ: {files[index]}, {other} != {shape}")
+    to_degrees = modality == "ori" and config.enface_preview.orientation_units == "radians"
+    jpeg = output.with_suffix(".jpg")
     with tempfile.TemporaryDirectory(prefix="enface-preview-", dir=output.parent) as scratch:
-        entries = []
+        sources = dict(files)
         for index, path in files.items():
-            # Treat only the final extension as a format indicator; acquisition
-            # labels may contain dots (e.g. tilted12.5deg).
-            if path.name.lower().endswith((".nii", ".nii.gz")):
-                array = np.asarray(nib.load(path).dataobj)
-            else:
-                array = np.asarray(load_data(input_path=path, mat_variable=None))
-            if array.ndim > 2 and all(size == 1 for size in array.shape[2:]):
-                array = array.reshape(array.shape[:2])
-            if array.ndim != 2:
-                raise ValueError(f"Expected 2D enface map (or singleton trailing axes): {path}, {array.shape}")
-            if shape is not None and array.shape != shape:
-                raise ValueError(f"Tile dimensions differ: {path}, {array.shape} != {shape}")
-            shape = array.shape
-            array = array.astype(np.float32)
-            if modality == "ori" and config.enface_preview.orientation_units == "radians":
+            is_nifti = path.name.lower().endswith((".nii", ".nii.gz"))
+            if not to_degrees and is_nifti and len(nib.load(path).shape) > 2:
+                continue
+            array = (np.asarray(nib.load(path).dataobj) if is_nifti
+                     else np.asarray(load_data(input_path=path, mat_variable=None)))
+            array = array.reshape(*shape, 1).astype(np.float32)
+            if to_degrees:
                 array = np.rad2deg(array)
-            normalized = Path(scratch) / f"tile-{index}.nii"
-            nib.save(nib.Nifti1Image(array, np.eye(4)), normalized)
-            grid = config.enface_preview.grid_config
-            x, y = tile_position(index, config.acquisition.grid_size_y, shape, overlap,
-                                 grid.grid_type, batch_id, order=grid.order,
-                                 columns=max(files) // config.acquisition.grid_size_y + 1)
-            entries.append({"filepath": str(normalized.resolve()), "x": x, "y": y})
-        spec = Path(scratch) / "tiles.yaml"
-        spec.write_text(yaml.safe_dump({"metadata": {"scan_resolution": config.acquisition.scan_resolution_3d[:2]}, "tiles": entries}))
+            sources[index] = Path(scratch) / f"tile-{index}.nii"
+            nib.save(nib.Nifti1Image(array, np.eye(4)), sources[index])
+        spec = tile_config(config, sources, shape, overlap, Path(scratch) / "tiles.yaml")
         mosaic2d(tile_info_file=str(spec), nifti_output=str(output),
-                 tile_overlap=overlap if overlap else 0, circular_mean=modality == "ori")
+                 jpeg_output=None if modality == "ori" else str(jpeg),
+                 print_grid=str(output.with_name(f"{output.stem}_grid.jpg")),
+                 tile_overlap=overlap if overlap else 0, circular_mean=modality == "ori",
+                 voxel_size_xyz=list(config.acquisition.scan_resolution_3d[:2]))
     if not output.is_file():
         raise RuntimeError(f"mosaic2d did not produce {output}")
-    jpeg = output.with_suffix(".jpg")
-    convert_image(input=output, output=jpeg, angle_to_rgb=modality == "ori", output_format="jpg")
+    if modality == "ori":
+        # mosaic2d's JPEG is grayscale; orientation previews use an angle colormap.
+        # Transpose to match the orientation of mosaic2d's JPEGs.
+        angles = np.asarray(nib.load(output).dataobj).squeeze().T
+        convert_image(data=angles, output=jpeg, angle_to_rgb=True, output_format="jpg")
     return jpeg
 
 

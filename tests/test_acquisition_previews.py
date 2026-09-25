@@ -69,12 +69,16 @@ class PreviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.expected_tiles(self.cfg, self.ident, self.root, "normal", 1)
 
-    def test_geometry(self):
-        self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "column-by-column"), (8, 0))
-        self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "snake-by-columns"), (8, 16))
-        self.assertEqual(preview.tile_position(2, 2, (10, 20), .2, "snake-by-columns", 2), (0, 16))
+    def layout(self, files, mode, order, columns=3):
+        self.cfg.acquisition.tile_overlap = 20
+        self.cfg.enface_preview.grid_config = PreviewGridConfig(grid_type=mode, order=order)
+        with TemporaryDirectory() as scratch:
+            out = preview.tile_config(self.cfg, files, (10, 20), .2, Path(scratch) / "tiles.yaml")
+            import yaml
+            return {t["tile_number"] - 1: (t["x"], t["y"], t["filepath"])
+                    for t in yaml.safe_load(out.read_text())["tiles"]}
 
-    def test_grid_modes_match_linc_convert(self):
+    def test_tile_config_uses_linc_convert_grid(self):
         from linc_convert.modalities.psoct import generate_tile_config as grids
         generators = {
             "row-by-row": grids._generate_row_by_row,
@@ -90,15 +94,18 @@ class PreviewTests(unittest.TestCase):
                     # Non-square acquisition: 3 strips of 2 tiles.
                     expected = generator(2 if row_based else 3, 3 if row_based else 2,
                                          10, 20, .2, .2, order, "tile_{tile_number:04d}.nii")
-                    actual = [preview.tile_position(i, 2, (10, 20), .2, mode,
-                              order=order, columns=3) for i in range(6)]
-                    self.assertEqual(actual, [(t["x"], t["y"]) for t in expected])
+                    expected = [(round(t["x"]), round(t["y"])) for t in expected]
+                    files = {i: Path(f"/data/image_{i + 7}.nii") for i in range(6)}
+                    actual = self.layout(files, mode, order)
+                    x0, y0 = min(x for x, _ in expected), min(y for _, y in expected)
+                    self.assertEqual([actual[i][:2] for i in range(6)],
+                                     [(x - x0, y - y0) for x, y in expected])
+                    self.assertEqual(actual[4][2], "/data/image_11.nii")
                     for batch in range(1, 4):
-                        points = actual[(batch - 1) * 2:batch * 2]
-                        cropped = [(x-min(p[0] for p in points), y-min(p[1] for p in points)) for x, y in points]
-                        strip = [preview.tile_position(i, 2, (10, 20), .2, mode, batch,
-                                 order=order, columns=3) for i in range((batch-1)*2, batch*2)]
-                        self.assertEqual(strip, cropped)
+                        points = expected[(batch - 1) * 2:batch * 2]
+                        cropped = [(x - min(p[0] for p in points), y - min(p[1] for p in points)) for x, y in points]
+                        strip = self.layout({i: files[i] for i in range((batch - 1) * 2, batch * 2)}, mode, order)
+                        self.assertEqual([strip[i][:2] for i in sorted(strip)], cropped)
 
     def test_grid_schema_validation_and_legacy_migration(self):
         for mode in ("column-by-column", "snake-by-columns"):
@@ -233,7 +240,8 @@ class PreviewTests(unittest.TestCase):
             output = self.root / "stitched" / f"{modality}.nii"
             jpeg = preview.stitch_preview_modality.fn(self.cfg, files[modality], modality, output)
             self.assertTrue(jpeg.is_file())
-            result = nib.load(output).get_fdata()
+            self.assertTrue(output.with_name(f"{modality}_grid.jpg").is_file())
+            result = nib.load(output).get_fdata().squeeze()
             self.assertEqual(result.shape, (16, 12))
             self.assertAlmostEqual(result[3, 3], 1, places=4)
             self.assertAlmostEqual(result[11, 9], 4, places=4)
