@@ -11,6 +11,10 @@ function [Jones1_3D, Jones2_3D] = spectral2complex(spectralFile, spectralOpts, o
 %                    - BlineSize   : Size of the B-line (pixels of Y axis).
 %                    - isRawFormat : Input is headerless packed 12-bit data
 %                                    (read into local variable is12bit).
+%                    - preloadedCorrections : Optional output of
+%                                    psoct.spectral.loadSpectralCorrections (set by
+%                                    the batch wrapper); skips re-reading the
+%                                    calibration/dispersion files.
 %     outputOpts   : Struct with fields:
 %                    - Paths       : Struct with fields:
 %                      - complex : Path to the output complex NIfTI file.
@@ -31,7 +35,6 @@ end
 spectralOpts = psoct.internal.opts.normalizeSpectralOpts(spectralOpts);
 outputOpts = psoct.internal.opts.normalizeOutputOpts(outputOpts);
 
-dispCompFile = string(spectralOpts.dispCompFile);
 AlineSize = spectralOpts.AlineSize;
 BlineSize = spectralOpts.BlineSize;
 is12bit = spectralOpts.isRawFormat; % packed 12-bit, headerless (tile_saving_type=spectral_12bit)
@@ -98,12 +101,15 @@ InterpolationParameters = [ ...
 
 phaseMode = spectralOpts.interpolationMethod == "phase_calibration";
 Wavelengths_l = []; Wavelengths_r = []; InterpolatedWavelengths2 = [];
-calibration = struct();
-if phaseMode
-    calibration = psoct.spectral.loadPhaseCalibration( ...
-        spectralOpts.interpolationPath, AlineLength, spectralOpts.phaseCalibrationDispersion, ...
-        spectralOpts.dphaseFile, spectralOpts.linPhaseFile, spectralOpts.dspPhaseFile);
-else
+
+% Calibration/dispersion files: use the batch's preloaded copy when it matches
+% this tile's sample count; otherwise (e.g. a standalone call) read them here.
+corrections = spectralOpts.preloadedCorrections;
+if isempty(corrections) || corrections.sampleCount ~= AlineLength
+    corrections = psoct.spectral.loadSpectralCorrections(spectralOpts, AlineLength);
+end
+calibration = corrections.calibration;
+if ~phaseMode
     [Wavelengths_l, Wavelengths_r, InterpolatedWavelengths2, Ks] = ...
         opticstream_interpolationwave(InterpolationParameters); %#ok<ASGLU>
 end
@@ -128,18 +134,9 @@ params.Wavelengths_l          = Wavelengths_l;
 params.Wavelengths_r          = Wavelengths_r;
 params.InterpolatedWavelengths = InterpolatedWavelengths2;
 
-% Read the channel-specific corrections from the two halves of one file.
-if phaseMode && spectralOpts.phaseCalibrationDispersion && ~isempty(calibration.dispersion)
-    phaseCorrection1 = calibration.dispersion;
-    phaseCorrection2 = calibration.dispersion;
-else
-    [phaseCorrection1, phaseCorrection2] = ...
-        opticstream_read_dispersion(dispCompFile, AlineLength);
-end
-
 % Replicate along A-line dimension to match interpolated buffer size
-phaseCorrection1 = repmat(phaseCorrection1, 1, Aline);
-phaseCorrection2 = repmat(phaseCorrection2, 1, Aline);
+phaseCorrection1 = repmat(corrections.phaseCorrection1, 1, Aline);
+phaseCorrection2 = repmat(corrections.phaseCorrection2, 1, Aline);
 
 % Preallocate complex stacks for Jones1 and Jones2:
 % dimensions: Bline x Aline x DepthL (complex)

@@ -16,6 +16,8 @@ from opticstream.utils.polling_watcher import PollingStableWatcher
 
 
 def scan_config(root, **preview):
+    preview.setdefault("batch_enabled", True)
+    preview.setdefault("grid_config", {"grid_type": "column-by-column", "order": "down-right"})
     return SimpleNamespace(
         project_base_path=Path(root) / "out",
         mosaics_per_slice=2,

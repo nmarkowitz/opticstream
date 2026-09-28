@@ -41,8 +41,8 @@ def _check_command_flag_and_enface_validation(tmp_path, enabled):
             validate_processed_batch_outputs(**args)
 
 
-def _check_existing_blocks_default_enabled():
-    assert PSOCTProcessingParams.model_validate({}).save_volume_outputs is True
+def _check_default_disabled():
+    assert PSOCTProcessingParams.model_validate({}).save_volume_outputs is False
 
 
 def _check_disabled_upload_skips_all_milestones(tmp_path, cfg):
@@ -80,7 +80,7 @@ class VolumeOutputTests(unittest.TestCase):
                 _check_command_flag_and_enface_validation(Path(folder), enabled)
 
     def test_default(self):
-        _check_existing_blocks_default_enabled()
+        _check_default_disabled()
 
     def test_upload(self):
         with TemporaryDirectory() as folder:
@@ -100,6 +100,9 @@ class VolumeOutputTests(unittest.TestCase):
             cfg = config(Path(folder), True, stitch_3d_volumes=False)
             _check_disabled_stitch_skips_before_volume_milestone(Path(folder), cfg)
 
-    def test_stitch_3d_volumes_default_enabled(self):
+    def test_stitch_3d_volumes_default_disabled(self):
         with TemporaryDirectory() as folder:
-            self.assertTrue(config(Path(folder), True).stitch_3d_volumes)
+            cfg = PSOCTScanConfigModel(project_name="test", project_base_path=Path(folder),
+                acquisition=dict(grid_size_x_normal=1, grid_size_x_tilted=1, grid_size_y=1),
+                zarr_config=ZarrConfig())
+            self.assertFalse(cfg.stitch_3d_volumes)

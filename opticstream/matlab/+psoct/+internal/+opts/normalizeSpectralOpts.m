@@ -31,6 +31,7 @@ arguments
     nargs.dspPhaseFile (1,1) string = ""
     nargs.phaseCalibrationDispersion (1,1) logical = false
     nargs.flipChannel2Spectra logical = []
+    nargs.preloadedCorrections = [] % from psoct.spectral.loadSpectralCorrections
 end
 if ~isempty(nargs.flipChannel2Spectra) && ~isscalar(nargs.flipChannel2Spectra)
     error('psoct:calibration:InvalidFlip', 'flipChannel2Spectra must be a scalar logical.');

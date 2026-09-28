@@ -204,7 +204,7 @@ class PSOCTProcessingParams(BaseModel):
     )
 
     save_volume_outputs: bool = Field(
-        default=True,
+        default=False,
         description=("Save per-tile dBI, R3D and O3D volume files. Disable for enface-only "
                      "disk output; intermediate volumes are still computed in memory. "
                      "Also skips volume validation, mosaic volume stitching and volume uploads. "
@@ -383,7 +383,7 @@ class PSOCTScanConfigModel(BaseModel):
     )
     archive_tile_name_format: str = Field(
         default=(
-            "{project_name}_sample-slice{slice_id:02d}_chunk-{tile_id:04d}_acq-{acq}_OCT.nii.gz"
+            "{project_name}_slice-{slice_id:04d}_tile-{tile_id:04d}_acq-{acq}_OCT.nii.gz"
         ),
         description=(
             "Filename template for archived tile outputs "
@@ -392,7 +392,7 @@ class PSOCTScanConfigModel(BaseModel):
     )
     complex_tile_name_format: str = Field(
         default=(
-            "{project_name}_sample-slice{slice_id:02d}_chunk-{tile_id:04d}_acq-{acq}"
+            "{project_name}_slice-{slice_id:04d}_tile-{tile_id:04d}_acq-{acq}"
             "_desc-complex_OCT.nii.gz"
         ),
         description=(
@@ -451,7 +451,7 @@ class PSOCTScanConfigModel(BaseModel):
     )
 
     stitch_3d_volumes: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Enable 3D mosaic volume stitching (including focus finding) and "
             "mosaic volume uploads. When false, both are skipped without setting "

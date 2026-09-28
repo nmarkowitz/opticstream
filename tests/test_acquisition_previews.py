@@ -16,7 +16,8 @@ from opticstream.state.oct_project_state import OCTMosaicId
 
 def config(root):
     return SimpleNamespace(project_base_path=Path(root) / "out", mosaics_per_slice=2,
-        enface_preview=EnfacePreviewConfig(**{f"{m}_pattern": f"{m}_{{image:04d}}.nii" for m in preview.MODALITIES}),
+        enface_preview=EnfacePreviewConfig(batch_enabled=True, grid_config={"grid_type": "column-by-column", "order": "down-right"},
+                                            **{f"{m}_pattern": f"{m}_{{image:04d}}.nii" for m in preview.MODALITIES}),
         acquisition=PSOCTAcquisitionParams(grid_size_y=2, grid_size_x_normal=2,
             grid_size_x_tilted=3, tile_overlap=0))
 
@@ -115,6 +116,10 @@ class PreviewTests(unittest.TestCase):
             self.assertNotIn("traversal", migrated.model_dump())
         with self.assertRaises(ValueError):
             PreviewGridConfig(grid_type="row-by-row", order="down-right")
+        defaults = EnfacePreviewConfig()
+        self.assertFalse(defaults.batch_enabled)
+        self.assertEqual((defaults.grid_config.grid_type, defaults.grid_config.order),
+                         ("snake-by-columns", "up-right"))
         cfg = EnfacePreviewConfig(grid_config={"grid_type": "snake-by-rows", "order": "left-up"})
         self.assertEqual(cfg.grid_config.order, "left-up")
 

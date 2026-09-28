@@ -21,7 +21,7 @@ def config(root="/tmp", normal=3, tilted=2, rows=2, pattern="spectral_{image}.ni
             grid_size_x_normal=normal, grid_size_x_tilted=tilted, grid_size_y=rows,
             tile_overlap=0, filename_pattern=pattern,
             acquisition_mosaic_map={"normal0deg": 1, "tilted15deg": 2}),
-        enface_preview=EnfacePreviewConfig(**{
+        enface_preview=EnfacePreviewConfig(batch_enabled=True, grid_config={"grid_type": "column-by-column", "order": "down-right"}, **{
             f"{m}_pattern": f"img_{{image}}_{m}.nii" for m in ("aip", "mip", "ori", "ret")}),
     )
 

@@ -1,7 +1,7 @@
 # MATLAB enface-only disk output
 
-Each PSOCTScanConfig has `processing.save_volume_outputs` (default `true`).
-Set it to `false` to stop writing per-tile dBI, R3D and O3D NIfTI volumes.
+Each PSOCTScanConfig has `processing.save_volume_outputs` (default `false`).
+When `false`, OpticStream does not write per-tile dBI, R3D and O3D NIfTI volumes.
 MATLAB still reconstructs intermediate volumes in memory to calculate enface maps.
 This saves disk space and write time, not the reconstruction memory allocation.
 
@@ -17,8 +17,8 @@ Slice registration remains enabled; this setting controls reconstructed tile
 volumes and their mosaic outputs, not registration-derived orientation products.
 
 `processing.save_enface_2d_as_3d` is independent: false stores enface maps as 2D
-NIfTI instead of X-by-Y-by-1. `stitch_3d_volumes` (default `true`) is an
-independent switch: set it to `false` to keep saving per-tile volumes but skip
+NIfTI instead of X-by-Y-by-1. `stitch_3d_volumes` (default `false`) is an
+independent switch: when `false`, per-tile volumes can still be saved but OpticStream skips
 mosaic volume stitching (including focus finding) and mosaic volume uploads.
 Enabling volume saving does not override disabled stitching.
 

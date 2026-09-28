@@ -94,7 +94,7 @@ strips. `right-down` and `down-right` start at top-left; `left-down` and `down-l
 at top-right; `right-up` and `up-right` at bottom-left; `left-up` and `up-left` at
 bottom-right. Snake reverses the fast direction on alternate strips.
 
-Default is `column-by-column` / `down-right`. In column-first mode strips advance
+Default is `snake-by-columns` / `up-right`; batch previews (`batch_enabled`) are off by default. In column-first mode strips advance
 along Y and batches along X; row-first swaps those axes. **Batch size stays
 grid_size_y and batch count stays the selected grid_size_x**, so row-first has
 grid_size_y physical columns and grid_size_x physical rows. This keeps the existing

@@ -31,7 +31,7 @@ is exposed as `opticstream` (with alias `ops`).
 
 ### `oct`
 
-- `opticstream oct setup PROJECT_NAME [--project-base-path ... --grid-size-x-normal ... --grid-size-x-tilted ... --grid-size-y ...]`
+- `opticstream oct setup PROJECT_NAME [--project-base-path ... --grid-size-x-normal ... --grid-size-x-tilted ... --grid-size-y ... --dandi ... --dandi-path ... --archive-path ... --interpolation {wavelength,phase_calibration} --num-workers ... --linphase-file ... --dspphase-file ... --dispcomp-file ... --dphase-file ... --acq-mosaic-map normal0deg=1,tilted15deg=2 --filename-pattern 'spectral_{image}.nii']`
 - `opticstream oct create-lock PROJECT_NAME`
 - `opticstream oct update-block`
 - `opticstream oct watch PROJECT_NAME FOLDER_PATH [MOSAIC_RANGES] [--slice-offset ... --stability-seconds ... --poll-interval ... --direct/--no-direct --refresh ... --force-resend --min-complex-file-size-bytes ... --verbose]`

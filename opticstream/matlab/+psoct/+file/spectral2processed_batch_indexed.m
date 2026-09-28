@@ -47,6 +47,10 @@ psoct.file.internal.ensureParpool(numWorkers, poolType);
 
 modalities = psoct.file.internal.processedModalities();
 
+% Load the phase calibration / dispersion compensation files once for the
+% whole batch; each tile's spectral2complex reuses them instead of reopening.
+spectralOpts = preloadSpectralCorrections(files, spectralOpts, optsMatFile);
+
 if ~isempty(numWorkers) && numWorkers == 1
     for idx = 1:numel(files)
         inFile = files{idx};
@@ -119,4 +123,34 @@ parfor idx = 1:numel(files)
 end
 end
 
+end
+
+function spectralOpts = preloadSpectralCorrections(files, spectralOpts, optsMatFile)
+%PRELOADSPECTRALCORRECTIONS Attach the batch's calibration/dispersion data to spectralOpts.
+%   Uses the same spectralOpts each tile sees (optsMatFile merged with the
+%   passed overrides). On failure, tiles fall back to reading the files
+%   themselves and report the error per tile as before.
+if isempty(files)
+    return
+end
+try
+    effectiveOpts = spectralOpts;
+    if optsMatFile ~= ""
+        loadedOpts = psoct.internal.opts.loadOptsWithDefaults( ...
+            optsMatFile, "spectralOpts", "psoct:file:spectral2processed_batch_indexed");
+        effectiveOpts = psoct.internal.opts.mergeStructs(loadedOpts.spectralOpts, spectralOpts);
+    end
+    normalizedOpts = psoct.internal.opts.normalizeSpectralOpts(effectiveOpts);
+    if normalizedOpts.isRawFormat
+        sampleCount = 2048; % headerless packed raw geometry (see spectral2complex)
+    else
+        info = niftiinfo(files{1});
+        sampleCount = info.ImageSize(1);
+    end
+    spectralOpts.preloadedCorrections = ...
+        psoct.spectral.loadSpectralCorrections(effectiveOpts, sampleCount);
+catch ME
+    warning("psoct:file:spectral2processed_batch_indexed:PreloadFailed", ...
+        "Could not preload spectral corrections; tiles will load them individually: %s", ME.message);
+end
 end

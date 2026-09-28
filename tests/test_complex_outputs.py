@@ -37,8 +37,12 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(cfg.processing.save_complex_outputs)
         self.assertEqual(
             cfg.complex_tile_name_format,
-            "{project_name}_sample-slice{slice_id:02d}_chunk-{tile_id:04d}_acq-{acq}"
+            "{project_name}_slice-{slice_id:04d}_tile-{tile_id:04d}_acq-{acq}"
             "_desc-complex_OCT.nii.gz",
+        )
+        self.assertEqual(
+            cfg.archive_tile_name_format,
+            "{project_name}_slice-{slice_id:04d}_tile-{tile_id:04d}_acq-{acq}_OCT.nii.gz",
         )
 
     def test_matlab_opts_carry_complex_dir_only_when_set(self):
