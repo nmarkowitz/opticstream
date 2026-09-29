@@ -13,12 +13,14 @@ from opticstream.utils.acquisition_sequence import AcquisitionSequence
 BIG = 100 * 1024  # the watcher ignores files smaller than 100 KB
 
 
-def config(root="/tmp", normal=3, tilted=2, rows=2, pattern="spectral_{image}.nii"):
+def config(root="/tmp", normal=3, tilted=2, rows=2, pattern="spectral_{image}.nii",
+           rows_tilted=None):
     return SimpleNamespace(
         project_base_path=Path(root) / "out",
         mosaics_per_slice=2,
         acquisition=PSOCTAcquisitionParams(
             grid_size_x_normal=normal, grid_size_x_tilted=tilted, grid_size_y=rows,
+            grid_size_y_tilted=rows_tilted,
             tile_overlap=0, filename_pattern=pattern,
             acquisition_mosaic_map={"normal0deg": 1, "tilted15deg": 2}),
         enface_preview=EnfacePreviewConfig(batch_enabled=True, grid_config={"grid_type": "column-by-column", "order": "down-right"}, **{
@@ -44,6 +46,12 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(where(704), (1, 2, 352))
         self.assertEqual(where(705), (2, 1, 1))
         self.assertEqual(where(1409), (3, 1, 1))
+
+    def test_tilted_tiles_per_batch(self):
+        # 22 strips of 18 (normal) and 25 (tilted) tiles, as in sub-260928.
+        seq = AcquisitionSequence(config(normal=22, tilted=22, rows=18, rows_tilted=25))
+        self.assertEqual(seq.sizes, {1: 396, 2: 550})
+        self.assertEqual(seq.first_image(2, 1), 947)
 
     def test_unequal_grids_and_start_position(self):
         seq = AcquisitionSequence(config(normal=3, tilted=2, rows=2), start_slice=5, start_mosaic=2)
@@ -91,6 +99,15 @@ class WatcherSequenceTests(unittest.TestCase):
             found = self.batches(self.watcher(folder, cfg, sequence=seq))
         # slice 3 tilted = mosaic 6 (4 tiles), then slice 4 normal = mosaic 7.
         self.assertEqual([(m, b) for m, b, _ in found], [(6, 1), (6, 2), (7, 1)])
+
+    def test_tilted_batches_use_grid_size_y_tilted(self):
+        cfg = config(normal=2, tilted=2, rows=2, rows_tilted=3)  # mosaic 1: 4 tiles, mosaic 2: 6
+        with TemporaryDirectory() as folder:
+            write(folder, [f"spectral_{i:04d}.nii" for i in range(1, 11)])
+            found = self.batches(self.watcher(folder, cfg, sequence=AcquisitionSequence(cfg)))
+        self.assertEqual([(m, b, len(files)) for m, b, files in found],
+                         [(1, 1, 2), (1, 2, 2), (2, 1, 3), (2, 2, 3)])
+        self.assertEqual(found[3][2], ("spectral_0008.nii", "spectral_0009.nii", "spectral_0010.nii"))
 
     def test_fixed_mosaic_ignores_batches_beyond_grid(self):
         cfg = config(normal=3, tilted=2, rows=2)

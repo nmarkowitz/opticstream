@@ -284,9 +284,10 @@ class OCTWatcherService:
                 if not tile_indices:
                     continue
 
+                batch_size = self._batch_size(source_mosaic_id)
                 batches: dict[int, list[int]] = defaultdict(list)
                 for image_index in sorted(tile_indices):
-                    logical_batch = (image_index - 1) // self.batch_size + 1
+                    logical_batch = (image_index - 1) // batch_size + 1
                     batches[logical_batch].append(image_index)
 
                 max_batches = self._batches_in_mosaic(source_mosaic_id)
@@ -301,13 +302,13 @@ class OCTWatcherService:
                                 max_batches,
                             )
                         continue
-                    if len(batch_tile_indices) < self.batch_size:
+                    if len(batch_tile_indices) < batch_size:
                         logger.warning(
                             "Incomplete batch source_mosaic=%s logical_batch=%s (%s tiles, need %s)",
                             source_mosaic_id,
                             logical_batch,
                             len(batch_tile_indices),
-                            self.batch_size,
+                            batch_size,
                         )
                         continue
 
@@ -352,13 +353,22 @@ class OCTWatcherService:
 
         return out
 
-    def _batches_in_mosaic(self, source_mosaic_id: int) -> int:
-        context = mosaic_context_from_ids(
+    def _mosaic_context(self, source_mosaic_id: int):
+        return mosaic_context_from_ids(
             slice_id=slice_from_mosaic(source_mosaic_id, self.scan_config.mosaics_per_slice),
             mosaic_id=source_mosaic_id,
             mosaics_per_slice=self.scan_config.mosaics_per_slice,
         )
-        return context.grid_size_x(self.scan_config)
+
+    def _batches_in_mosaic(self, source_mosaic_id: int) -> int:
+        return self._mosaic_context(source_mosaic_id).grid_size_x(self.scan_config)
+
+    def _batch_size(self, source_mosaic_id: int) -> int:
+        """Tiles per batch: batch_size, or grid_size_y_tilted for tilted mosaics."""
+        tilted = getattr(self.scan_config.acquisition, "grid_size_y_tilted", None)
+        if tilted is None or self._mosaic_context(source_mosaic_id).is_normal_config:
+            return self.batch_size
+        return tilted
 
     def _matches_fixed_mosaic(self, source_mosaic_id: int) -> bool:
         """Apply --slice/--acquisition/--mosaic as a filter to legacy filenames."""
@@ -441,19 +451,20 @@ class OCTWatcherService:
             for pf in parsed_files:
                 files_by_tile[pf.tile_number].append(pf.path)
 
+            batch_size = self._batch_size(source_mosaic_id)
             batches: dict[int, list[int]] = defaultdict(list)
             for tile_number in sorted(files_by_tile.keys()):
-                logical_batch = (tile_number - 1) // self.batch_size + 1
+                logical_batch = (tile_number - 1) // batch_size + 1
                 batches[logical_batch].append(tile_number)
 
             for logical_batch, batch_tile_numbers in sorted(batches.items()):
-                if len(batch_tile_numbers) < self.batch_size:
+                if len(batch_tile_numbers) < batch_size:
                     logger.warning(
                         "Incomplete batch source_mosaic=%s logical_batch=%s (%s tiles, need %s)",
                         source_mosaic_id,
                         logical_batch,
                         len(batch_tile_numbers),
-                        self.batch_size,
+                        batch_size,
                     )
                     continue
 
@@ -907,7 +918,11 @@ def watch(
             )
         logger.info("Using slice=%s mosaic_slot=%s from command line", fixed_slice_id, fixed_mosaic_slot)
 
-    logger.info("Using batch_size=%s", batch_size)
+    logger.info(
+        "Using batch_size=%s (tilted: %s)",
+        batch_size,
+        scan_config.acquisition.grid_size_y_tilted or batch_size,
+    )
     logger.info("Using mosaics_per_slice=%s", scan_config.mosaics_per_slice)
     logger.info("Using tile_saving_type=%s", scan_config.acquisition.tile_saving_type)
 

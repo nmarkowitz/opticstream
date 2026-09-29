@@ -113,7 +113,18 @@ class PSOCTAcquisitionParams(BaseModel):
     grid_size_y: int = Field(
         ...,
         ge=1,
-        description="Number of tiles per batch (rows) - determines batch size (required)",
+        description=(
+            "Number of tiles per batch (rows) - determines batch size (required). "
+            "Used for normal illumination, and for tilted unless grid_size_y_tilted is set"
+        ),
+    )
+    grid_size_y_tilted: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Number of tiles per batch (rows) for tilted illumination; "
+            "unset uses grid_size_y"
+        ),
     )
 
     tile_size_x_normal: int = Field(

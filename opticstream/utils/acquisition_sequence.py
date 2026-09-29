@@ -44,13 +44,12 @@ class AcquisitionSequence:
             )
         self.start_slice = start_slice
         self.start_mosaic = start_mosaic
-        rows = scan_config.acquisition.grid_size_y
         self.sizes = {}
         for slot in range(1, self.mosaics_per_slice + 1):
             context = mosaic_context_from_ids(
                 slice_id=1, mosaic_id=slot, mosaics_per_slice=self.mosaics_per_slice
             )
-            self.sizes[slot] = context.grid_size_x(scan_config) * rows
+            self.sizes[slot] = context.grid_size_x(scan_config) * context.grid_size_y(scan_config)
         self.slice_total = sum(self.sizes.values())
 
     def locate(self, image: int) -> SequencePosition:

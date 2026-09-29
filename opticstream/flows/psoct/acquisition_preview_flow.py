@@ -93,7 +93,7 @@ def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None, 
     ``names`` is an optional pre-read listing of ``input_dir``.
     """
     context = mosaic_context_from_ident(mosaic_ident, config)
-    rows = config.acquisition.grid_size_y
+    rows = context.grid_size_y(config)
     columns = context.grid_size_x(config)
     if batch_id is not None and not 1 <= batch_id <= columns:
         raise ValueError(f"batch_id must be between 1 and {columns}")
@@ -193,8 +193,10 @@ def tile_shape(path):
     return tuple(shape[:2])
 
 
-def tile_config(config, files, shape, overlap, out):
+def tile_config(config, files, shape, overlap, out, per_strip=None):
     """Write a linc-convert tile YAML for ``files`` (acquisition index -> path).
+
+    ``per_strip`` is the mosaic's tiles per strip (default: grid_size_y).
 
     The full grid comes from linc-convert's generate_tile_config; entries are then
     limited to ``files`` (a single batch keeps the direction its strip has in the
@@ -203,7 +205,7 @@ def tile_config(config, files, shape, overlap, out):
     from linc_convert.modalities.psoct.generate_tile_config import generate_tile_config
 
     grid = config.enface_preview.grid_config
-    per_strip = config.acquisition.grid_size_y
+    per_strip = per_strip or config.acquisition.grid_size_y
     strips = max(files) // per_strip + 1
     row_based = grid.grid_type in {"row-by-row", "snake-by-rows"}
     columns, rows = (per_strip, strips) if row_based else (strips, per_strip)
@@ -227,7 +229,8 @@ def tile_config(config, files, shape, overlap, out):
 
 @task
 def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path],
-                            modality: str, output: Path, batch_id: int | None = None) -> Path:
+                            modality: str, output: Path, batch_id: int | None = None,
+                            per_strip: int | None = None) -> Path:
     """Stitch acquisition tiles in place with linc-convert generate_tile_config + mosaic2d.
 
     Writes ``output`` (NIfTI), a JPEG next to it, and a ``*_grid.jpg`` tile diagram.
@@ -262,7 +265,8 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
                 array = np.rad2deg(array)
             sources[index] = Path(scratch) / f"tile-{index}.nii"
             nib.save(nib.Nifti1Image(array, np.eye(4)), sources[index])
-        spec = tile_config(config, sources, shape, overlap, Path(scratch) / "tiles.yaml")
+        spec = tile_config(config, sources, shape, overlap, Path(scratch) / "tiles.yaml",
+                           per_strip)
         mosaic2d(tile_info_file=str(spec), nifti_output=str(output),
                  jpeg_output=None if modality == "ori" else str(jpeg),
                  print_grid=str(output.with_name(f"{output.stem}_grid.jpg")),
@@ -288,10 +292,12 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None, *, 
     progress_file = progress_path(config, mosaic_ident, batch_id)
     progress = read_progress(progress_file, signature)
     outputs = {m: preview_path(config, mosaic_ident, batch_id, f"{m}.nii") for m in MODALITIES}
+    per_strip = mosaic_context_from_ident(mosaic_ident, config).grid_size_y(config)
     for modality in MODALITIES:
         output = outputs[modality]
         if modality not in progress["stitched"] or not output.with_suffix(".jpg").exists() or not output.exists():
-            stitch_preview_modality(config, files[modality], modality, output, batch_id)
+            stitch_preview_modality(config, files[modality], modality, output, batch_id,
+                                    per_strip=per_strip)
             if fingerprint(config, files) != signature:
                 raise RuntimeError("Acquisition files changed while stitching; wait for stability and retry")
             if modality not in progress["stitched"]:

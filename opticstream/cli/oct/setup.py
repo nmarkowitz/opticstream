@@ -89,6 +89,7 @@ def setup(
     grid_size_x_normal: int = 1,
     grid_size_x_tilted: int = 1,
     grid_size_y: int = 1,
+    grid_size_y_tilted: int | None = None,
     dandi: str | None = None,
     dandi_path: Path | None = None,
     archive_path: Path | None = None,
@@ -112,6 +113,8 @@ def setup(
 
     Parameters
     ----------
+    grid_size_y_tilted
+        Tiles per batch for tilted mosaics; unset uses ``grid_size_y``.
     dandi
         Name of the Prefect Secret block holding the DANDI API key.
     dandi_path
@@ -153,6 +156,8 @@ def setup(
         "grid_size_x_tilted": grid_size_x_tilted,
         "grid_size_y": grid_size_y,
     }
+    if grid_size_y_tilted is not None:
+        acquisition["grid_size_y_tilted"] = grid_size_y_tilted
     if acq_mosaic_map is not None:
         acquisition["acquisition_mosaic_map"] = parse_acq_mosaic_map(acq_mosaic_map)
     if filename_pattern:

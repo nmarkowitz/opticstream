@@ -22,7 +22,8 @@ slice is 37, image is 41, and the mosaic slot is 1. With two mosaics per slice,
 the global source mosaic is 73. The tilted15deg file maps to source mosaic 74.
 Watcher mosaic-range filters use these global source IDs. Slice offsets retain
 their existing behavior. Image numbers must be 1-based indices within a mosaic;
-batch size remains `grid_size_y`, and incomplete batches are not dispatched.
+batch size remains `grid_size_y` (`grid_size_y_tilted` for tilted mosaics when set),
+and incomplete batches are not dispatched.
 
 Acquisition labels are arbitrary: change the map to accept `normal5deg` or
 another label. Values are mosaic slots, not angle measurements. Slot ordering
@@ -51,7 +52,7 @@ With 22 x 16 grids for both illuminations, that places:
 | ... | ... | ... |
 
 Each mosaic holds `grid_size_x * grid_size_y` tiles, using `grid_size_x_normal` or
-`grid_size_x_tilted` for its illumination, and its tiles are renumbered from 1. After
+`grid_size_x_tilted` (and `grid_size_y_tilted`, when set) for its illumination, and its tiles are renumbered from 1. After
 the slice's last mosaic the sequence continues with mosaic 1 of the next slice.
 Placement depends only on the image number, so restarting the watcher is safe.
 

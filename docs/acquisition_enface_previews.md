@@ -80,7 +80,10 @@ Slice/mosaic identify outputs explicitly; acquisition is the exact filename labe
 
 Tiles are numbered consecutively within the acquisition starting at `first_image`
 (default 1). Batch 1 contains the first `grid_size_y` tiles, batch 2 the next set,
-etc. Total tiles = selected `grid_size_x` * `grid_size_y`.
+etc. Total tiles = selected `grid_size_x` * `grid_size_y`. Tilted mosaics use
+`grid_size_y_tilted` in place of `grid_size_y` when it is set, e.g. a scanner with
+22 strips of 18 (normal) and 25 (tilted) tiles uses `grid_size_x_normal=22`,
+`grid_size_x_tilted=22`, `grid_size_y=18`, `grid_size_y_tilted=25`.
 
 In the block editor, `enface_preview.grid_config` exposes all linc-convert modes:
 

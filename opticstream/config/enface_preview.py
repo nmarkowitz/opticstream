@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class PreviewGridConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
     grid_type: Literal["snake-by-columns", "row-by-row", "column-by-column", "snake-by-rows"] = Field(
-        default="snake-by-columns", description="Acquisition traversal. Snake reverses the fast direction on alternate strips; individual images are not flipped. Each strip still contains grid_size_y consecutive tiles.")
+        default="snake-by-columns", description="Acquisition traversal. Snake reverses the fast direction on alternate strips; individual images are not flipped. Each strip still contains grid_size_y (or grid_size_y_tilted) consecutive tiles.")
     order: Literal["up-right", "right-down", "left-down", "right-up", "left-up", "down-right", "down-left", "up-left"] = Field(
         default="up-right", description="Rows: right-down (top-left), left-down (top-right), right-up (bottom-left), left-up (bottom-right). Columns: down-right (top-left), down-left (top-right), up-right (bottom-left), up-left (bottom-right). First word is initial within-strip movement; second is movement between strips. Must match grid_type.")
 
@@ -31,7 +31,7 @@ class EnfacePreviewConfig(BaseModel):
     mip_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_mip.nii", description="MIP filename format; same placeholders as aip_pattern. Set the actual suffix, including .nii.gz if used.")
     ori_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_ori.nii", description="Orientation filename format. Orientation is blended with circular averaging.")
     ret_pattern: str = Field(default="mosaic_{mosaic:03d}_image_{image:04d}_ret.nii", description="Retardance filename format; no hardcoded modality suffix.")
-    grid_config: PreviewGridConfig = Field(default_factory=PreviewGridConfig, description="linc-convert-compatible grid traversal and starting direction for acquisition previews. grid_size_y is tiles per strip; selected grid_size_x is number of strips, regardless of traversal axis.")
+    grid_config: PreviewGridConfig = Field(default_factory=PreviewGridConfig, description="linc-convert-compatible grid traversal and starting direction for acquisition previews. grid_size_y (grid_size_y_tilted for tilted mosaics) is tiles per strip; selected grid_size_x is number of strips, regardless of traversal axis.")
     first_image: int = Field(default=1, ge=0, description="First filename image index within this acquisition. Batches themselves remain 1-based.")
     orientation_units: Literal["degrees", "radians"] = Field(default="degrees", description="Units of acquisition orientation maps; radians are converted to degrees for linc-convert.")
 

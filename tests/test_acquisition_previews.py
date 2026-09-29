@@ -79,6 +79,34 @@ class PreviewTests(unittest.TestCase):
             return {t["tile_number"] - 1: (t["x"], t["y"], t["filepath"])
                     for t in yaml.safe_load(out.read_text())["tiles"]}
 
+    def test_tilted_mosaic_uses_grid_size_y_tilted(self):
+        self.cfg.acquisition.grid_size_y_tilted = 3
+        tilted = OCTMosaicId(project_name="test", slice_id=1, mosaic_id=2)
+        self.assertEqual(list(preview.expected_tiles(self.cfg, tilted, self.root, "t", 2)["aip"]),
+                         [3, 4, 5])
+        self.assertEqual(len(preview.expected_tiles(self.cfg, tilted, self.root, "t")["aip"]), 9)
+        # Normal mosaics keep grid_size_y.
+        self.assertEqual(list(preview.expected_tiles(self.cfg, self.ident, self.root, "n", 2)["aip"]),
+                         [2, 3])
+        self.create_tiles(9)
+        def stitch(cfg, files, modality, output, batch_id, per_strip=None):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"nifti")
+            output.with_suffix(".jpg").write_bytes(b"jpeg")
+        with patch.object(preview, "stitch_preview_modality", side_effect=stitch) as stitched, \
+             patch.object(preview, "slack_notifications_enabled", return_value=False):
+            preview.run_preview(self.cfg, tilted, self.root, "t")
+        self.assertEqual({c.kwargs["per_strip"] for c in stitched.call_args_list}, {3})
+        # 3 strips of 3 tiles: tile 4 starts the second strip.
+        files = {i: Path(f"/data/image_{i + 1}.nii") for i in range(9)}
+        with TemporaryDirectory() as scratch:
+            import yaml
+            out = preview.tile_config(self.cfg, files, (10, 20), 0, Path(scratch) / "t.yaml", 3)
+            xs = {t["tile_number"]: t["x"] for t in yaml.safe_load(out.read_text())["tiles"]}
+        self.assertEqual(len(set(xs.values())), 3)
+        self.assertEqual(xs[1], xs[3])
+        self.assertNotEqual(xs[3], xs[4])
+
     def test_tile_config_uses_linc_convert_grid(self):
         from linc_convert.modalities.psoct import generate_tile_config as grids
         generators = {
@@ -144,7 +172,7 @@ class PreviewTests(unittest.TestCase):
     @patch.object(preview, "slack_notifications_enabled", return_value=False)
     def test_checkpoint_resume_then_slack(self, slack):
         self.create_tiles()
-        def stitch(cfg, files, modality, output, batch_id):
+        def stitch(cfg, files, modality, output, batch_id, per_strip=None):
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(b"nifti")
             output.with_suffix(".jpg").write_bytes(b"jpeg")
@@ -171,7 +199,7 @@ class PreviewTests(unittest.TestCase):
     @patch.object(preview, "slack_notifications_enabled", return_value=True)
     def test_failed_upload_retries_only_missing_modalities(self, slack):
         self.create_tiles()
-        def stitch(cfg, files, modality, output, batch_id):
+        def stitch(cfg, files, modality, output, batch_id, per_strip=None):
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(b"nifti")
             output.with_suffix(".jpg").write_bytes(b"jpeg")
@@ -188,7 +216,7 @@ class PreviewTests(unittest.TestCase):
     @patch.object(preview, "slack_notifications_enabled", return_value=False)
     def test_outputs_in_slice_folder_named_by_mosaic(self, slack):
         self.create_tiles()
-        def stitch(cfg, files, modality, output, batch_id):
+        def stitch(cfg, files, modality, output, batch_id, per_strip=None):
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(b"nifti")
             output.with_suffix(".jpg").write_bytes(b"jpeg")

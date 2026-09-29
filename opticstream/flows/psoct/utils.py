@@ -362,7 +362,10 @@ class MosaicContext(BaseModel):
         )
 
     def grid_size_y(self, config: PSOCTScanConfigModel) -> int:
-        return config.acquisition.grid_size_y
+        tilted = config.acquisition.grid_size_y_tilted
+        if self.is_normal_config or tilted is None:
+            return config.acquisition.grid_size_y
+        return tilted
 
     def tile_size_x(self, config: PSOCTScanConfigModel) -> int:
         return (
