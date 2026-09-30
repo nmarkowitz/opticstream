@@ -33,7 +33,7 @@ class MatlabSettingsTests(unittest.TestCase):
         from opticstream.flows.psoct.tile_batch_process_flow import process_tile_batch
 
         with patch("opticstream.flows.psoct.tile_batch_process_flow.OCT_STATE_SERVICE") as state, \
-             patch("opticstream.flows.psoct.tile_batch_process_flow.archive_tile_batch") as archive, \
+             patch("opticstream.flows.psoct.tile_batch_process_flow.archive_complex_tiles") as archive, \
              patch("opticstream.flows.psoct.tile_batch_process_flow.run_matlab_batch_command_or_cli") as matlab:
             result = process_tile_batch.fn(
                 batch_id=None, config=SimpleNamespace(matlab_processing_enabled=False),
@@ -41,7 +41,7 @@ class MatlabSettingsTests(unittest.TestCase):
             )
             self.assertEqual(result.name, "MatlabDisabled")
             self.assertEqual(state.mock_calls, [])
-            archive.submit.assert_not_called()
+            archive.assert_not_called()
             matlab.assert_not_called()
             load.assert_not_called()
 

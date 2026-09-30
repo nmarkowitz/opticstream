@@ -7,6 +7,7 @@ naming convention: linc.opticstream.{pipeline}.{hierarchy}.{state}
 
 from opticstream.events.psoct_events import (
     BATCH_ARCHIVED,
+    BATCH_COMPLEX_ARCHIVED,
     BATCH_PROCESSED,
     BATCH_READY,
     BATCH_UPLOADED,

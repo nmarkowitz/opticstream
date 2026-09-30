@@ -5,7 +5,7 @@ from opticstream.cli.oct.cli import oct_cli
 from opticstream.cli.oct.watch import _configure_logging
 from opticstream.config.psoct_scan_config import get_psoct_scan_config
 from opticstream.flows.psoct.acquisition_preview_flow import (
-    MODALITIES, expected_tiles, fingerprint, image_numbers_present, list_names,
+    enface_files, expected_tiles, fingerprint, list_names, naming_error,
     preview_path, progress_path, read_progress, preview_enface_batch,
     preview_enface_acquisition,
 )
@@ -19,20 +19,21 @@ from opticstream.utils.slack_settings import slack_notifications_enabled
 
 
 class EnfacePreviewWatcher:
-    def __init__(self, config, mosaic_ident, folder, acquisition, image_offset=0):
+    def __init__(self, config, mosaic_ident, folder, acquisition, image_offset=0, *,
+                 acquisition_previews=True, batch_previews=False):
         self.config = config
         self.ident = mosaic_ident
         self.folder = Path(folder)
         self.acquisition = acquisition
-        # Continuous numbering: tile 1 of this mosaic is image first_image + image_offset.
+        # Continuous numbering: tile 1 of this mosaic is image 1 + image_offset.
         self.image_offset = image_offset
         # Optional folder listing shared across mosaics for one polling pass.
         self.names = None
         context = mosaic_context_from_ident(mosaic_ident, config)
         # The full acquisition goes first: once its last batch is stable it is
         # stitched before any batch previews still waiting in the same pass.
-        self.candidates = [None] if config.enface_preview.acquisition_enabled else []
-        if config.enface_preview.batch_enabled:
+        self.candidates = [None] if acquisition_previews else []
+        if batch_previews:
             self.candidates += list(range(1, context.grid_size_x(config) + 1))
 
     def files(self, batch):
@@ -55,9 +56,8 @@ class EnfacePreviewWatcher:
             progress = read_progress(progress_path(self.config, self.ident, batch), signature)
             stitched = all(m in progress["stitched"]
                            and preview_path(self.config, self.ident, batch, f"{m}.jpg").exists()
-                           and preview_path(self.config, self.ident, batch, f"{m}.nii").exists()
-                           for m in MODALITIES)
-            uploaded = all(m in progress["uploaded"] for m in MODALITIES)
+                           for m in files)
+            uploaded = all(m in progress["uploaded"] for m in files)
             if not stitched or (slack_enabled and not uploaded):
                 yield batch
 
@@ -80,12 +80,15 @@ class SequencePreviewWatcher:
     started, so long runs do not keep rescanning finished mosaics.
     """
 
-    def __init__(self, config, sequence, folder, project_name, *, slice_offset=0):
+    def __init__(self, config, sequence, folder, project_name, *, slice_offset=0,
+                 acquisition_previews=True, batch_previews=False):
         self.config = config
         self.sequence = sequence
         self.folder = Path(folder)
         self.project_name = project_name
         self.slice_offset = slice_offset
+        self.previews = dict(acquisition_previews=acquisition_previews,
+                             batch_previews=batch_previews)
         self.labels = {slot: label for label, slot in reversed(
             list(config.acquisition.acquisition_mosaic_map.items()))}
         self.workers = {}
@@ -102,7 +105,7 @@ class SequencePreviewWatcher:
             offset = self.sequence.first_image(position.slice_id, position.mosaic_slot) - 1
             label = self.labels.get(position.mosaic_slot, str(position.mosaic_slot))
             self.workers[key] = EnfacePreviewWatcher(self.config, ident, self.folder, label,
-                                                     image_offset=offset)
+                                                     image_offset=offset, **self.previews)
         return self.workers[key]
 
     def _positions(self, last_image):
@@ -115,14 +118,10 @@ class SequencePreviewWatcher:
 
     def discover(self):
         names = list_names(self.folder)
-        pattern = self.config.enface_preview.aip_pattern
-        start = self.sequence.locate(1)
-        values = dict(slice=start.slice_id, mosaic=start.source_mosaic_id, acquisition="",
-                      project=self.project_name)
-        present = image_numbers_present(pattern, values, names)
+        present = {image for _, image in enface_files(self.config, names)}
         if not present:
             return
-        last_image = max(present) - self.config.enface_preview.first_image + 1
+        last_image = max(present)
         positions = list(self._positions(last_image))
         for number, position in enumerate(positions):
             key = position.source_mosaic_id
@@ -145,10 +144,13 @@ class SequencePreviewWatcher:
 
 
 def build_sequence_preview_watcher(config, sequence, folder, project_name, *,
-                                   slice_offset=0, stability_seconds=15, poll_interval=5):
+                                   slice_offset=0, stability_seconds=15, poll_interval=5,
+                                   acquisition_previews=True, batch_previews=False):
     """Polling watcher for previews of a continuously numbered acquisition folder."""
     worker = SequencePreviewWatcher(config, sequence, Path(folder).resolve(), project_name,
-                                    slice_offset=slice_offset)
+                                    slice_offset=slice_offset,
+                                    acquisition_previews=acquisition_previews,
+                                    batch_previews=batch_previews)
     return PollingStableWatcher(discover_candidates=worker.discover,
         candidate_key=lambda candidate: candidate, fingerprint=worker.fingerprint,
         process=worker.process, stability_seconds=stability_seconds,
@@ -156,10 +158,13 @@ def build_sequence_preview_watcher(config, sequence, folder, project_name, *,
 
 
 def build_preview_watcher(config, mosaic_ident, folder, acquisition, *,
-                          stability_seconds=15, poll_interval=5):
+                          stability_seconds=15, poll_interval=5,
+                          acquisition_previews=True, batch_previews=False):
     """Polling watcher that stitches previews for one acquisition folder."""
-    worker = EnfacePreviewWatcher(config, mosaic_ident, Path(folder).resolve(), acquisition)
-    # Validate templates before entering the polling loop.
+    worker = EnfacePreviewWatcher(config, mosaic_ident, Path(folder).resolve(), acquisition,
+                                  acquisition_previews=acquisition_previews,
+                                  batch_previews=batch_previews)
+    # Validate the input naming before entering the polling loop.
     worker.files(None)
     return PollingStableWatcher(discover_candidates=worker.discover,
         candidate_key=lambda batch: batch, fingerprint=worker.fingerprint,
@@ -170,24 +175,33 @@ def build_preview_watcher(config, mosaic_ident, folder, acquisition, *,
 @oct_cli.command
 def watch_enface(project_name: str, folder_path: Path, *, slice: int, mosaic: int,
                  acquisition: str, stability_seconds: int = 15,
-                 poll_interval: int = 5, verbose: bool = False):
+                 poll_interval: int = 5, previews: bool = True,
+                 batch_previews: bool = False, verbose: bool = False):
     """Watch one acquisition for complete batches and a complete full mosaic.
 
     `ops oct watch` already runs these previews when given --slice/--acquisition
     or --mosaic; use this command only to preview without processing.
 
-    slice/mosaic identify the acquisition explicitly, allowing filenames such as
-    aip_0001.nii without embedded IDs. acquisition substitutes into file patterns.
-    Use one watcher per acquisition. No MATLAB or spectral watcher is required.
+    Maps are found with acquisition.filename_pattern (which needs {modality}) and
+    filename_modality_map labels for aip, mip, ori and ret. slice/mosaic identify
+    the acquisition explicitly; acquisition is its filename label.
+    --no-previews skips the full-acquisition preview; --batch-previews also
+    previews each complete batch. Use one watcher per acquisition.
+    No MATLAB or spectral watcher is required.
     """
     _configure_logging(verbose)
     if slice < 1 or mosaic < 1:
         raise ValueError("slice and mosaic must be positive")
     if not folder_path.is_dir():
         raise ValueError(f"Input directory does not exist: {folder_path}")
+    if not previews and not batch_previews:
+        raise ValueError("Nothing to preview: --no-previews without --batch-previews")
     config = get_psoct_scan_config(project_name)
-    if not config.enface_preview.batch_enabled and not config.enface_preview.acquisition_enabled:
-        raise ValueError("Both enface preview flows are disabled in this block")
+    error = naming_error(config)
+    if error:
+        raise ValueError(f"Enface previews need the input naming to cover them: {error}")
     ident = OCTMosaicId(project_name=project_name, slice_id=slice, mosaic_id=mosaic)
     build_preview_watcher(config, ident, folder_path, acquisition,
-                          stability_seconds=stability_seconds, poll_interval=poll_interval).run()
+                          stability_seconds=stability_seconds, poll_interval=poll_interval,
+                          acquisition_previews=previews,
+                          batch_previews=batch_previews).run()

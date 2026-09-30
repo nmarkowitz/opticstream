@@ -9,7 +9,7 @@ from opticstream.flows.psoct.tile_file_reference import build_tile_file_referenc
 from opticstream.cli.oct.watch import OCTWatcherService
 
 
-PATTERN = "sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acquisition}_{modality}{extension}"
+PATTERN = "sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acq}_{modality}{extension}"
 
 
 class InputNamingTests(unittest.TestCase):
@@ -35,14 +35,39 @@ class InputNamingTests(unittest.TestCase):
         self.assertEqual(parsed.modality, "spectral")
         self.assertIsNone(parse_input_name("unrelated.txt", acq, 2))
 
-    def test_literal_suffix(self):
+    def test_saved_acquisition_placeholder_becomes_acq(self):
         acq = self.acquisition(filename_pattern="s{slice}_i{image}_{acquisition}.nii")
+        self.assertEqual(acq.filename_pattern, "s{slice}_i{image}_{acq}.nii")
+        self.assertEqual(parse_input_name("s1_i2_tilted15deg.nii", acq, 2).source_mosaic_id, 2)
+
+    def test_pattern_without_extension_matches_data_extensions(self):
+        acq = self.acquisition(filename_pattern="sub-test_tile-{image}_acq-{acq}_{modality}",
+                               filename_modality_map={"spectral": "spectral",
+                                                      "processed_surface_finding": "surf"})
+        for name, modality in [("sub-test_tile-0011_acq-normal0deg_spectral.nii", "spectral"),
+                               ("sub-test_tile-0011_acq-normal0deg_spectral.nii.gz", "spectral"),
+                               ("sub-test_tile-0011_acq-normal0deg_processed_surface_finding.nii", "surf"),
+                               ("sub-test_tile-0011_acq-tilted15deg_spectral.raw", "spectral")]:
+            with self.subTest(name=name):
+                parsed = parse_input_name(name, acq, 2, slice_id=1)
+                self.assertEqual((parsed.image_index, parsed.modality), (11, modality))
+        for name in ("sub-test_tile-0011_acq-normal0deg_spectral",
+                     "sub-test_tile-0011_acq-normal0deg_spectral.nii.bak",
+                     "sub-test_tile-0011_acq-normal0deg_spectral.txt"):
+            with self.subTest(name=name):
+                self.assertIsNone(parse_input_name(name, acq, 2, slice_id=1))
+        # A literal extension in the pattern is still matched exactly.
+        literal = self.acquisition(filename_pattern="spectral_{image}.nii")
+        self.assertIsNone(parse_input_name("spectral_0001.nii.gz", literal, 2))
+
+    def test_literal_suffix(self):
+        acq = self.acquisition(filename_pattern="s{slice}_i{image}_{acq}.nii")
         self.assertEqual(parse_input_name("s1_i2_normal0deg.nii", acq, 2).modality, "spectral")
 
     def test_validation_and_legacy_default(self):
         self.assertIsNone(self.acquisition().filename_pattern)
         self.assertEqual(self.acquisition(filename_pattern="spectral_{image}.nii").filename_pattern, "spectral_{image}.nii")
-        for pattern in ("{slice}_{acquisition}.nii", "{slice}_{image}_{acquisition}_{unknown}", "{slice}_{image}_{image}_{acquisition}"):
+        for pattern in ("{slice}_{acq}.nii", "{slice}_{image}_{acq}_{unknown}", "{slice}_{image}_{image}_{acq}"):
             with self.assertRaises(ValueError):
                 self.acquisition(filename_pattern=pattern)
 

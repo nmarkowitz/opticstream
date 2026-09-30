@@ -130,6 +130,7 @@ class OCTBatchStateView(OCTStateView):
     enface_processed: bool = False
     uploaded: bool = False
     archived: bool = False
+    complex_uploaded: bool = False
 
 
 class OCTBatchState(
@@ -179,6 +180,14 @@ class OCTBatchState(
         
     def reset_uploaded(self) -> None:
         self.uploaded = False
+        self.touch()
+
+    def set_complex_uploaded(self, value: bool = True) -> None:
+        self.complex_uploaded = value
+        self.touch()
+
+    def reset_complex_uploaded(self) -> None:
+        self.complex_uploaded = False
         self.touch()
 
 

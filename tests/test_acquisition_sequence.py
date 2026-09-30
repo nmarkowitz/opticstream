@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from opticstream.cli.oct.watch import OCTWatcherService, build_watch_previews
-from opticstream.config.enface_preview import EnfacePreviewConfig
 from opticstream.config.psoct_scan_config import PSOCTAcquisitionParams
 from opticstream.utils.acquisition_sequence import AcquisitionSequence
 
@@ -23,8 +22,6 @@ def config(root="/tmp", normal=3, tilted=2, rows=2, pattern="spectral_{image}.ni
             grid_size_y_tilted=rows_tilted,
             tile_overlap=0, filename_pattern=pattern,
             acquisition_mosaic_map={"normal0deg": 1, "tilted15deg": 2}),
-        enface_preview=EnfacePreviewConfig(batch_enabled=True, grid_config={"grid_type": "column-by-column", "order": "down-right"}, **{
-            f"{m}_pattern": f"img_{{image}}_{m}.nii" for m in ("aip", "mip", "ori", "ret")}),
     )
 
 
@@ -116,19 +113,36 @@ class WatcherSequenceTests(unittest.TestCase):
             found = self.batches(self.watcher(folder, cfg, fixed_slice_id=1, fixed_mosaic_slot=1))
         self.assertEqual([(m, b) for m, b, _ in found], [(1, 1), (1, 2), (1, 3)])
 
+    def test_enface_maps_stay_out_of_spectral_batches(self):
+        cfg = config(normal=3, tilted=2, rows=2, pattern="img_{image}_{modality}.nii")
+        with TemporaryDirectory() as folder:
+            write(folder, [f"img_{i}_{m}.nii" for i in range(1, 5)
+                           for m in ("spectral", "aip", "mip", "ori", "ret")])
+            found = self.batches(self.watcher(folder, cfg, sequence=AcquisitionSequence(cfg)))
+        self.assertEqual(found, [(1, 1, ("img_1_spectral.nii", "img_2_spectral.nii")),
+                                 (1, 2, ("img_3_spectral.nii", "img_4_spectral.nii"))])
+
+    def test_processed_input_keeps_enface_maps_in_batches(self):
+        cfg = config(normal=3, tilted=2, rows=2, pattern="img_{image}_{modality}.nii")
+        cfg.acquisition.tile_saving_type = "processed_with_spectral"
+        with TemporaryDirectory() as folder:
+            write(folder, [f"img_{i}_{m}.nii" for i in (1, 2) for m in ("spectral", "aip")])
+            found = self.batches(self.watcher(folder, cfg, sequence=AcquisitionSequence(cfg)))
+        self.assertEqual(len(found[0][2]), 4)
+
 
 class SequencePreviewTests(unittest.TestCase):
     @patch("opticstream.cli.oct.watch_enface.slack_notifications_enabled", return_value=False)
     def test_previews_follow_sequence(self, slack):
         with TemporaryDirectory() as folder:
-            cfg = config(folder, normal=3, tilted=2, rows=2)
+            cfg = config(folder, normal=3, tilted=2, rows=2, pattern="img_{image}_{modality}.nii")
             seq = AcquisitionSequence(cfg)
             watcher = build_watch_previews(cfg, project_name="p", folder_path=Path(folder),
                 fixed_slice_id=None, fixed_mosaic_slot=None, acquisition=None, slice_offset=0,
-                stability_seconds=0, poll_interval=1, sequence=seq)
+                stability_seconds=0, poll_interval=1, sequence=seq, batch_previews=True)
             worker = watcher.discover_candidates.__self__
             maps = lambda images: [f"img_{i}_{m}.nii" for i in images
-                                   for m in ("aip", "mip", "ori", "ret")]
+                                   for m in ("aip", "mip", "ori", "ret", "surf")]
             write(folder, maps(range(1, 9)))  # mosaic 1 complete + mosaic 2 batch 1
             found = list(worker.discover())
             self.assertEqual(found, [(1, None), (1, 1), (1, 2), (1, 3), (2, 1)])

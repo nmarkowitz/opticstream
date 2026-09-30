@@ -16,6 +16,7 @@ from opticstream.config.psoct_scan_config import (
 )
 from opticstream.events import BATCH_READY
 from opticstream.events.psoct_event_emitters import emit_batch_psoct_event
+from opticstream.flows.psoct.tile_batch_archive_flow import archive_tile_batch_flow
 from opticstream.flows.psoct.tile_batch_process_flow import process_tile_batch
 from opticstream.flows.psoct.utils import oct_batch_ident
 from opticstream.flows.psoct.utils import (
@@ -244,6 +245,23 @@ class OCTWatcherService:
             )
         return saving_type
 
+    def _batch_input_modalities(self) -> set[str] | None:
+        """filename_modality_map values that form processing batches (None: all).
+
+        With {modality} in filename_pattern one folder may also hold acquisition
+        enface maps (aip/mip/ori/ret, used for previews); only the processing
+        input type goes into batches, unless processed maps are that input.
+        """
+        saving_type = self.scan_config.acquisition.tile_saving_type
+        if saving_type in (TileSavingType.SPECTRAL, TileSavingType.SPECTRAL_12bit):
+            return {"spectral"}
+        if saving_type is TileSavingType.COMPLEX:
+            return {"complex", "processed"}
+        if saving_type is TileSavingType.COMPLEX_WITH_SPECTRAL:
+            # Processing reads the complex tiles; archiving reads the spectral ones.
+            return {"spectral", "complex", "processed"}
+        return None
+
     def discover_candidates(self) -> list[OCTBatchCandidate]:
         if not _is_readable_dir(self.folder_path):
             logger.warning(
@@ -386,6 +404,7 @@ class OCTWatcherService:
     def _discover_two_mosaic_files(self) -> list[ParsedTileFile]:
         logger.debug("_discover_two_mosaic_files: scanning all tile files")
         out: list[ParsedTileFile] = []
+        batch_modalities = self._batch_input_modalities()
 
         for path in self.folder_path.iterdir():
             if not path.is_file():
@@ -406,6 +425,8 @@ class OCTWatcherService:
                     sequence=self.sequence,
                 )
                 if custom is None:
+                    continue
+                if batch_modalities is not None and custom.modality not in batch_modalities:
                     continue
                 if custom.source_mosaic_id is None:
                     if path.name not in self._warned_unplaced:
@@ -661,6 +682,18 @@ class OCTWatcherService:
             len(candidate.files),
         )
 
+        # Archive (and its upload event) must not depend on MATLAB processing, and
+        # an archive failure must not block processing.
+        try:
+            archive_tile_batch_flow(
+                batch_id=batch_ident,
+                config=self.scan_config,
+                file_list=list(candidate.files),
+                force_rerun=self.force_resend,
+            )
+        except Exception:
+            logger.exception("Archive failed for %s; continuing with processing", batch_ident)
+
         process_tile_batch(
             batch_id=batch_ident,
             config=self.scan_config,
@@ -710,12 +743,24 @@ def build_watch_previews(
     stability_seconds: int,
     poll_interval: int,
     sequence: AcquisitionSequence | None = None,
+    acquisition_previews: bool = True,
+    batch_previews: bool = False,
 ) -> PollingStableWatcher | None:
     """Enface preview watcher for the folder's slice/mosaic, or None when not applicable."""
-    preview = scan_config.enface_preview
-    if not (preview.batch_enabled or preview.acquisition_enabled):
-        logger.info("Enface previews disabled in the block (batch_enabled/acquisition_enabled)")
+    from opticstream.flows.psoct.acquisition_preview_flow import naming_error
+
+    if not (acquisition_previews or batch_previews):
+        logger.info("Enface previews off (--no-previews)")
         return None
+    error = naming_error(scan_config)
+    if error:
+        logger.info(
+            "Enface previews off: %s. Name the maps with {modality} and map their "
+            "labels to aip/mip/ori/ret in acquisition.filename_modality_map",
+            error,
+        )
+        return None
+    previews = dict(acquisition_previews=acquisition_previews, batch_previews=batch_previews)
     if sequence is not None:
         # Imported here: watch_enface imports this module.
         from opticstream.cli.oct.watch_enface import build_sequence_preview_watcher
@@ -729,6 +774,7 @@ def build_watch_previews(
             slice_offset=slice_offset,
             stability_seconds=stability_seconds,
             poll_interval=poll_interval,
+            **previews,
         )
     if fixed_slice_id is None or fixed_mosaic_slot is None:
         logger.info(
@@ -774,6 +820,7 @@ def build_watch_previews(
         acquisition,
         stability_seconds=stability_seconds,
         poll_interval=poll_interval,
+        **previews,
     )
 
 
@@ -843,6 +890,7 @@ def watch(
     acquisition: str | None = None,
     mosaic: int | None = None,
     previews: bool = True,
+    batch_previews: bool = False,
     verbose: bool = False,
 ) -> None:
     """
@@ -863,18 +911,23 @@ def watch(
     2 = tilted) say where the folder starts. --acquisition may name the mosaic by
     its acquisition.acquisition_mosaic_map label instead of --mosaic.
 
-    When acquisition.filename_pattern has no {slice} or {acquisition} (e.g.
+    When acquisition.filename_pattern has no {slice} or {acq} (e.g.
     "spectral_{image}.nii"), image numbers are one continuous sequence: image 1 is
     the start mosaic (default slice 1, mosaic 1), and after that mosaic's
     grid_size_x * grid_size_y tiles the sequence continues into the next mosaic
     and then the next slice, each sized by its own grid.
 
-    When filenames contain {slice}/{acquisition}, the names place each tile and
+    When filenames contain {slice}/{acq}, the names place each tile and
     --slice/--mosaic only filter which tiles this watcher handles.
 
+    With {modality} in filename_pattern, only the processing input type (e.g.
+    spectral) forms batches; other mapped labels are left for previews.
+
     With the slice and mosaic known, a background loop also stitches enface previews
-    from the acquisition's own AIP/MIP/orientation/retardance maps (block
-    enface_preview settings) and posts them to Slack. --no-previews turns this off.
+    from the acquisition's own AIP/MIP/orientation/retardance maps (found through
+    filename_pattern's {modality} and filename_modality_map) and posts them to
+    Slack. --no-previews turns off the full-acquisition preview; --batch-previews
+    also previews each complete batch.
     """
     _configure_logging(verbose)
 
@@ -927,7 +980,7 @@ def watch(
     logger.info("Using tile_saving_type=%s", scan_config.acquisition.tile_saving_type)
 
     companions = ()
-    if previews:
+    if previews or batch_previews:
         preview_watcher = build_watch_previews(
             scan_config,
             project_name=project_name,
@@ -939,6 +992,8 @@ def watch(
             stability_seconds=stability_seconds,
             poll_interval=poll_interval,
             sequence=sequence,
+            acquisition_previews=previews,
+            batch_previews=batch_previews,
         )
         if preview_watcher is not None:
             companions = (preview_watcher,)

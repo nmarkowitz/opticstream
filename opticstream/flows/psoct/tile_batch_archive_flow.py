@@ -1,18 +1,31 @@
 import os
 from pathlib import Path
+from typing import Any, Dict, Optional, Sequence
 
 from prefect import flow, get_run_logger, task
 
+from opticstream.config.psoct_scan_config import PSOCTScanConfigModel
 from opticstream.hooks.publish_hooks import (
     publish_oct_mosaic_hook,
     publish_oct_project_hook,
 )
+from opticstream.events import BATCH_READY, get_event_trigger
 from opticstream.events.psoct_event_emitters import emit_batch_psoct_event
-from opticstream.events.psoct_events import BATCH_ARCHIVED
-from opticstream.flows.psoct.tile_file_reference import TileFileReference
-from opticstream.flows.psoct.utils import processed_output_prefix
+from opticstream.events.psoct_events import BATCH_ARCHIVED, BATCH_COMPLEX_ARCHIVED
+from opticstream.flows.psoct.tile_file_reference import (
+    TileFileReference,
+    build_tile_file_reference_list,
+)
+from opticstream.flows.psoct.utils import (
+    batch_ident_from_payload,
+    load_scan_config_for_payload,
+    mosaic_context_from_ids,
+    path_list_from_payload,
+    processed_output_prefix,
+)
 from opticstream.state.milestone_wrappers_psoct import oct_batch_processing_milestone
 from opticstream.state.oct_project_state import OCT_STATE_SERVICE, OCTBatchId
+from opticstream.state.state_guards import force_rerun_from_payload
 from opticstream.tasks.archive_file import archive_file
 from opticstream.hooks.slack_notification_hook import slack_notification_hook
 
@@ -30,13 +43,8 @@ def archive_tile_batch(
     archive_path: Path,
     archive_tile_name_format: str,
     force_rerun: bool = False,
-    emit_event: bool = True,
 ) -> list[str]:
-    """Archive the batch's raw tiles; returns the archived paths.
-
-    ``emit_event=False`` leaves BATCH_ARCHIVED to the caller, e.g. to add the
-    batch's complex tiles to the same upload.
-    """
+    """Archive the batch's raw tiles, emit BATCH_ARCHIVED; returns the archived paths."""
     logger = get_run_logger()
     archive_path.mkdir(parents=True, exist_ok=True)
     with OCT_STATE_SERVICE.open_batch(batch_ident=batch_id) as batch:
@@ -73,12 +81,11 @@ def archive_tile_batch(
             f"{len(files_with_issue)} file(s): " + " | ".join(files_with_issue)
         )
 
-    if emit_event:
-        emit_batch_psoct_event(
-            BATCH_ARCHIVED,
-            batch_id,
-            extra_payload={"file_list": archived_file_paths},
-        )
+    emit_batch_psoct_event(
+        BATCH_ARCHIVED,
+        batch_id,
+        extra_payload={"file_list": archived_file_paths},
+    )
     return archived_file_paths
 
 
@@ -96,8 +103,11 @@ def archive_complex_tiles(
 
     Each uncompressed ``<prefix>_complex.nii`` is deleted once the whole batch's
     gzipped archive copies are validated; the archive copies are never deleted.
+    The caller emits BATCH_COMPLEX_ARCHIVED (see ``emit_batch_complex_archived``).
     """
     logger = get_run_logger()
+    with OCT_STATE_SERVICE.open_batch(batch_ident=batch_id) as batch:
+        batch.reset_complex_uploaded()
     local_paths = []
     futures = []
     for ref in file_reference_list:
@@ -125,8 +135,10 @@ def archive_complex_tiles(
     return archived
 
 
-def emit_batch_archived(batch_id: OCTBatchId, file_list: list[str]) -> None:
-    emit_batch_psoct_event(BATCH_ARCHIVED, batch_id, extra_payload={"file_list": file_list})
+def emit_batch_complex_archived(batch_id: OCTBatchId, file_list: list[str]) -> None:
+    emit_batch_psoct_event(
+        BATCH_COMPLEX_ARCHIVED, batch_id, extra_payload={"file_list": file_list}
+    )
 
 
 def check_archive_result(
@@ -164,18 +176,72 @@ def check_archive_result(
 )
 def archive_tile_batch_flow(
     batch_id: OCTBatchId,
-    file_reference_list: list[TileFileReference],
+    config: PSOCTScanConfigModel,
+    file_list: list[Path],
     *,
-    acquisition_label: str,
-    archive_path: Path,
-    archive_tile_name_format: str,
     force_rerun: bool = False,
 ) -> None:
+    """Archive a batch's raw tiles, independent of (and concurrent with) MATLAB processing.
+
+    Runs regardless of ``matlab_processing_enabled``; a no-op when ``archive_path``
+    is unset. BATCH_ARCHIVED then triggers the DANDI upload.
+    """
+    if not config.archive_path:
+        get_run_logger().info("archive_path not configured; skipping archive of %s", batch_id)
+        return
+    mosaic_context = mosaic_context_from_ids(
+        slice_id=batch_id.slice_id,
+        mosaic_id=batch_id.mosaic_id,
+        mosaics_per_slice=config.mosaics_per_slice,
+    )
+    file_reference_list = build_tile_file_reference_list(
+        file_list,
+        config=config,
+        mosaic_context=mosaic_context,
+    )
     archive_tile_batch(
         batch_id=batch_id,
-        file_reference_list=file_reference_list,
-        acquisition_label=acquisition_label,
-        archive_path=archive_path,
-        archive_tile_name_format=archive_tile_name_format,
+        file_reference_list=list(file_reference_list.values()),
+        acquisition_label=mosaic_context.acquisition_label,
+        archive_path=config.archive_path,
+        archive_tile_name_format=config.archive_tile_name_format,
         force_rerun=force_rerun,
     )
+
+
+@flow
+def archive_tile_batch_event_flow(payload: Dict[str, Any]) -> None:
+    """Event-driven wrapper for ``archive_tile_batch_flow``, triggered by BATCH_READY."""
+    archive_tile_batch_flow(
+        batch_id=batch_ident_from_payload(payload),
+        config=load_scan_config_for_payload(payload),
+        file_list=path_list_from_payload(payload),
+        force_rerun=force_rerun_from_payload(payload),
+    )
+
+
+def to_deployment(
+    *,
+    project_name: Optional[str] = None,
+    deployment_name: str = "local",
+    extra_tags: Sequence[str] = (),
+    concurrency_limit: int = 1,
+):
+    """
+    Create both deployments:
+    - manual `archive_tile_batch_flow` (ad-hoc reruns)
+    - event-driven `archive_tile_batch_event_flow` (triggered by BATCH_READY,
+      alongside but independent of `process_tile_batch_event_flow`)
+    """
+    manual = archive_tile_batch_flow.to_deployment(
+        name=deployment_name,
+        tags=["tile-batch", "archive-tile-batch", *list(extra_tags)],
+        concurrency_limit=concurrency_limit,
+    )
+    event = archive_tile_batch_event_flow.to_deployment(
+        name=deployment_name,
+        tags=["event-driven", "tile-batch", "archive-tile-batch", *list(extra_tags)],
+        triggers=[get_event_trigger(BATCH_READY, project_name=project_name)],
+        concurrency_limit=concurrency_limit,
+    )
+    return [manual, event]

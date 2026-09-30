@@ -9,6 +9,7 @@ BATCH_READY = "linc.opticstream.psoct.batch.ready"  # Batch of tiles detected (t
 BATCH_COMPLEXED = "linc.opticstream.psoct.batch.complexed"  # Batch complexed (triggers complex to processed flow)
 BATCH_PROCESSED = "linc.opticstream.psoct.batch.processed"  # Batch processed (triggers state management, emits mosaic.ready when all batches done)
 BATCH_ARCHIVED = "linc.opticstream.psoct.batch.archived"  # Batch archived and compressed (triggers upload flow, state management)
+BATCH_COMPLEX_ARCHIVED = "linc.opticstream.psoct.batch.complex_archived"  # MATLAB complex tiles archived (triggers complex upload flow)
 BATCH_UPLOADED = "linc.opticstream.psoct.batch.uploaded"  # Batch uploaded to LINC storage (triggers upload completion handlers)
 
 # Mosaic-Level Events

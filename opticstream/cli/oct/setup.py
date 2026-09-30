@@ -171,7 +171,7 @@ def setup(
         ``"{normal: 1, tilted: 2}"``.
     filename_pattern
         Input filename template; unset keeps legacy ``mosaic_<M>_image_<N>_*``
-        naming. Requires ``{image}``; optional ``{slice}``, ``{acquisition}``,
+        naming. Requires ``{image}``; optional ``{slice}``, ``{acq}``,
         ``{subject}``, ``{modality}``, ``{extension}``. Quote it in the shell,
         e.g. ``'spectral_{image}.nii'``.
     """

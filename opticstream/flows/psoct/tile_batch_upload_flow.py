@@ -9,7 +9,12 @@ from opticstream.hooks.publish_hooks import (
     publish_oct_mosaic_hook,
     publish_oct_project_hook,
 )
-from opticstream.events import BATCH_ARCHIVED, BATCH_UPLOADED, get_event_trigger
+from opticstream.events import (
+    BATCH_ARCHIVED,
+    BATCH_COMPLEX_ARCHIVED,
+    BATCH_UPLOADED,
+    get_event_trigger,
+)
 from opticstream.flows.psoct.utils import (
     batch_ident_from_payload,
     load_scan_config_for_payload,
@@ -39,6 +44,30 @@ def upload_to_dandi_tile_batch(
     dandi_api_key: Secret | None = None,
     force_rerun: bool = False,
 ) -> None:
+    _upload_files(batch_id, file_list, dandi_instance, realpath, dandi_api_key)
+
+
+@flow(
+    flow_run_name="upload-complex-to-dandi-batch-{batch_id}",
+    on_completion=[publish_oct_mosaic_hook, publish_oct_project_hook],
+    on_failure=[slack_notification_hook],
+)
+@upload_flow_enabled
+@oct_batch_processing_milestone(field_name="complex_uploaded")
+def upload_complex_to_dandi_tile_batch(
+    batch_id: OCTBatchId,
+    file_list: list[Path],
+    *,
+    dandi_instance: str = "dandi",
+    realpath: bool = True,
+    dandi_api_key: Secret | None = None,
+    force_rerun: bool = False,
+) -> None:
+    """Upload a batch's archived complex tiles (tracked apart from the raw-tile upload)."""
+    _upload_files(batch_id, file_list, dandi_instance, realpath, dandi_api_key)
+
+
+def _upload_files(batch_id, file_list, dandi_instance, realpath, dandi_api_key) -> None:
     logger = get_run_logger()
     if not file_list:
         logger.warning("No files provided for %s", batch_id)
@@ -64,6 +93,18 @@ def upload_to_dandi_batch_event_flow(payload: Dict[str, Any]) -> None:
     )
 
 
+@flow
+def upload_complex_to_dandi_batch_event_flow(payload: Dict[str, Any]) -> None:
+    batch_ident = batch_ident_from_payload(payload)
+    cfg = load_scan_config_for_payload(payload)
+    return upload_complex_to_dandi_tile_batch(
+        batch_id=batch_ident,
+        file_list=path_list_from_payload(payload),
+        dandi_api_key=cfg.dandi_api_key,
+        force_rerun=force_rerun_from_payload(payload),
+    )
+
+
 def to_deployment(
     *,
     project_name: Optional[str] = None,
@@ -74,6 +115,7 @@ def to_deployment(
     Create both deployments:
     - manual `upload_to_dandi_tile_batch` (ad-hoc reruns)
     - event-driven DANDI upload (triggered by BATCH_ARCHIVED)
+    - event-driven complex-tile DANDI upload (triggered by BATCH_COMPLEX_ARCHIVED)
     """
     manual = upload_to_dandi_tile_batch.to_deployment(
         name=deployment_name,
@@ -84,4 +126,9 @@ def to_deployment(
         tags=["event-driven", "tile-batch", "upload-to-dandi", *list(extra_tags)],
         triggers=[get_event_trigger(BATCH_ARCHIVED, project_name=project_name)],
     )
-    return [manual, event]
+    complex_event = upload_complex_to_dandi_batch_event_flow.to_deployment(
+        name=deployment_name,
+        tags=["event-driven", "tile-batch", "upload-to-dandi", "complex", *list(extra_tags)],
+        triggers=[get_event_trigger(BATCH_COMPLEX_ARCHIVED, project_name=project_name)],
+    )
+    return [manual, event, complex_event]

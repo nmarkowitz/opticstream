@@ -10,8 +10,11 @@ from opticstream.config.psoct_scan_config import PSOCTScanConfig
 def migrate_blocks(*, apply=False, client=None, block_class=PSOCTScanConfig):
     """Validate all named blocks before writing; never print block values/secrets.
 
-    This is an additive-schema migration, not a transactional server operation.
-    Pause block editing while applying; saves overwrite each document individually.
+    Loading applies the model's legacy migrations (e.g. dropping the removed
+    ``enface_preview`` group, keeping its orientation_units under acquisition), so
+    re-saving writes the current schema. This is not a transactional server
+    operation. Pause block editing while applying; saves overwrite each document
+    individually.
     """
     if client is None:
         with get_client(sync_client=True) as active_client:
