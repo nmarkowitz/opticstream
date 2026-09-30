@@ -6,13 +6,13 @@ Omitting `filename_pattern` (or setting it to null) preserves legacy parsing.
 
 ```json
 {
-  "filename_pattern": "sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acquisition}_{modality}{extension}",
+  "filename_pattern": "sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acq}_{modality}{extension}",
   "acquisition_mosaic_map": {"normal0deg": 1, "tilted15deg": 2}
 }
 ```
 
 This is a template, not a regular expression. The only required placeholder is
-`image`. Optional placeholders are `slice`, `acquisition`, `subject`, `modality`,
+`image`. Optional placeholders are `slice`, `acq` (the acquisition label), `subject`, `modality`,
 and `extension`. Each may appear once; do not add format specifiers such as `:04d`.
 Numeric fields accept zero padding. Matching is case-sensitive and covers the
 entire basename. The watcher scans the selected directory, not recursively.
@@ -65,17 +65,29 @@ start a folder partway through, e.g. with the tilted mosaic of slice 3, pass
 A batch number beyond a mosaic's `grid_size_x` is never dispatched (it is logged
 and ignored), whatever the naming.
 
-When the filename already contains `{slice}`/`{acquisition}`, or uses legacy
+When the filename already contains `{slice}`/`{acq}`, or uses legacy
 `mosaic_###_image_####` names, these options act as a filter: only matching files
 are dispatched.
 
 No `_spectral.nii` suffix is required. For example, use
-`s{slice}_tile{image}_{acquisition}.nii` with
+`s{slice}_tile{image}_{acq}.nii` with
 `filename_default_modality: "spectral"`. Or keep `{modality}{extension}` and
 set `filename_modality_map` to `{"rawscan": "spectral"}` for `_rawscan.nii`.
 The default map accepts spectral, complex, processed, aip, mip, ori, ret, surf,
 and dbi. Unknown acquisition/modality labels are ignored. Duplicate files for
 the same tile and modality cause an error rather than silently replacing data.
+
+Batches contain only the processing input for `tile_saving_type` (`spectral` for
+spectral input; `complex`/`processed` for complex; all three for
+`complex_with_spectral`; every mapped label for `processed_with_spectral`). Other
+mapped labels in the same folder, such as `processed_aip: aip`, are not batched;
+labels mapped to aip/mip/ori/ret are what acquisition enface previews read
+(see acquisition_enface_previews.md).
+
+The extension can be left out: a pattern with no `{extension}` and no literal
+extension at its end, such as `sub-test_tile-{image}_acq-{acq}_{modality}`, matches
+names ending in `.nii`, `.nii.gz`, `.mat` or `.raw` (other endings, e.g. `.nii.bak`,
+are ignored). A literal extension (`..._{modality}.nii`) is still matched exactly.
 
 The extension placeholder accepts `.nii`, `.nii.gz`, `.raw`, etc.; the actual
 contents must still be supported by the configured reader and tile saving type.

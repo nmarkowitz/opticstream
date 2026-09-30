@@ -13,12 +13,11 @@ from pathlib import Path
 
 from prefect.blocks.core import Block
 from prefect.blocks.system import Secret
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from niizarr import ZarrConfig
 import psoct_toolbox
 from opticstream.config.utils import with_positions
-from opticstream.config.enface_preview import EnfacePreviewConfig
 from opticstream.utils.naming_convention import normalize_project_name
     
 
@@ -61,10 +60,10 @@ class PSOCTAcquisitionParams(BaseModel):
         default=None,
         description=(
             "Optional full input filename template; null preserves legacy naming. "
-            "Example: sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acquisition}_{modality}{extension}. "
+            "Example: sub-{subject}_sample-slice{slice}_chunk-{image}_acq-{acq}_{modality}{extension}. "
             "slice037/chunk-0041/acq-normal0deg means slice 37, image 41, and the mosaic slot mapped from normal0deg. "
-            "Required placeholder: {image}; optional: {slice}, {acquisition}, {subject}, {modality}, {extension}. "
-            "Without {slice}/{acquisition} (e.g. spectral_{image}.nii), pass them to `ops oct watch` "
+            "Required placeholder: {image}; optional: {slice}, {acq} (acquisition label), {subject}, {modality}, {extension}. "
+            "Without {slice}/{acq} (e.g. spectral_{image}.nii), pass them to `ops oct watch` "
             "via --slice and --acquisition (or --mosaic). "
             "Numbers accept zero padding; do not use :04d format specifiers. Literals and labels are case-sensitive. "
             "Suffixes/extensions may be literals or placeholders; matching an extension does not add support for its file format."
@@ -79,8 +78,20 @@ class PSOCTAcquisitionParams(BaseModel):
     )
     filename_modality_map: Dict[str, Literal["spectral", "complex", "processed", "aip", "mip", "ori", "ret", "surf", "dbi"]] = Field(
         default_factory=lambda: {key: key for key in ("spectral", "complex", "processed", "aip", "mip", "ori", "ret", "surf", "dbi")},
-        description="Map filename modality labels to processing types; e.g. rawscan: spectral. Unknown labels are ignored. No fixed _spectral.nii suffix is required.",
+        description="Map filename modality labels to processing types; e.g. rawscan: spectral, processed_aip: aip. Unknown labels are ignored. No fixed _spectral.nii suffix is required. Acquisition enface previews read the files mapped to aip, mip, ori and ret (filename_pattern needs {modality}).",
     )
+    orientation_units: Literal["degrees", "radians"] = Field(
+        default="degrees",
+        description="Units of acquisition-written orientation maps; radians are converted to degrees for enface previews.",
+    )
+
+    @field_validator("filename_pattern", mode="before")
+    @classmethod
+    def rename_acquisition_placeholder(cls, value):
+        """Saved patterns from before the {acquisition} -> {acq} rename."""
+        if isinstance(value, str):
+            return value.replace("{acquisition}", "{acq}")
+        return value
 
     @field_validator("filename_pattern")
     @classmethod
@@ -318,6 +329,24 @@ class PSOCTScanConfigModel(BaseModel):
         validate_assignment=True, revalidate_instances="always"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def drop_enface_preview(cls, value: Any) -> Any:
+        """Blocks saved before enface_preview was removed: keep only orientation_units.
+
+        Preview file names now come from acquisition.filename_pattern and
+        filename_modality_map; the grid is fixed; enabling moved to watch flags.
+        """
+        if not isinstance(value, dict) or "enface_preview" not in value:
+            return value
+        value = dict(value)
+        legacy = value.pop("enface_preview") or {}
+        units = legacy.get("orientation_units") if isinstance(legacy, dict) else None
+        acquisition = value.get("acquisition")
+        if units and isinstance(acquisition, dict):
+            value["acquisition"] = {"orientation_units": units, **acquisition}
+        return value
+
     project_name: str = Field(
         ...,
         min_length=1,
@@ -332,8 +361,8 @@ class PSOCTScanConfigModel(BaseModel):
         default=True,
         description=(
             "Enable MATLAB-based tile-batch processing and slice registration for this block. "
-            "When false, these flows skip before processing, archiving within the tile flow, "
-            "or updating processing milestones. Standalone archive/upload and non-MATLAB "
+            "When false, these flows skip before processing or updating processing "
+            "milestones. Raw-tile archive/upload (a separate flow) and non-MATLAB "
             "flows are unaffected. Does not stop already-running MATLAB sessions."
         ),
     )
@@ -353,16 +382,12 @@ class PSOCTScanConfigModel(BaseModel):
         description="Project-level MATLAB processing options",
     )
 
-    enface_preview: EnfacePreviewConfig = Field(
-        default_factory=EnfacePreviewConfig,
-        description="Acquisition-produced AIP/MIP/orientation/retardance previews, stitched by `ops oct watch` (or watch-enface) and posted to Slack; independent of MATLAB and spectral processing state.",
-    )
     stitched_enface_slack_upload: bool = Field(
         default=False,
         description=(
             "Post the pipeline's stitched 2D enface mosaics (slice-NN/stitched/mosaic_NNN_*.jpg) "
             "to Slack. The JPEGs are always written; when false, only the acquisition "
-            "previews (enface_preview) go to Slack."
+            "enface previews from `ops oct watch` go to Slack."
         ),
     )
 
@@ -414,7 +439,7 @@ class PSOCTScanConfigModel(BaseModel):
     )
     mosaic_volume_format: str = Field(
         default=(
-            "{project_name}_sample-slice{slice_id:02d}_acq-{acq}_proc-{modality}_OCT.ome.zarr"
+            "{project_name}_sample-slice{slice_id:04d}_acq-{acq}_proc-{modality}_OCT.ome.zarr"
         ),
         description=(
             "Filename template for stitched 3D volume outputs "
@@ -423,7 +448,7 @@ class PSOCTScanConfigModel(BaseModel):
     )
     mosaic_enface_format: str = Field(
         default=(
-            "{project_name}_sample-slice{slice_id:02d}_acq-{acq}_proc-{modality}_OCT.nii.gz"
+            "{project_name}_sample-slice{slice_id:04d}_acq-{acq}_proc-{modality}_OCT.nii.gz"
         ),
         description=(
             "Filename template for stitched enface outputs "
@@ -431,14 +456,14 @@ class PSOCTScanConfigModel(BaseModel):
         ),
     )
     mosaic_mask_format: str = Field(
-        default=("{project_name}_sample-slice{slice_id:03d}_acq-{acq}_OCT_mask.nii.gz"),
+        default=("{project_name}_sample-slice{slice_id:04d}_acq-{acq}_OCT_mask.nii.gz"),
         description=(
             "Filename template for stitched mask outputs "
             "(supports placeholders: project_name, slice_id, acq)"
         ),
     )
     slice_registered_format: str = Field(
-        default=("{project_name}_sample-slice{slice_id:03d}_proc-3daxis_OCT.nii.gz"),
+        default=("{project_name}_sample-slice{slice_id:04d}_proc-3daxis_OCT.nii.gz"),
         description=(
             "Filename template for slice-registered axis outputs "
             "(supports placeholders: project_name, slice_id)"

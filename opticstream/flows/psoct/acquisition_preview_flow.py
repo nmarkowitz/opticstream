@@ -1,14 +1,15 @@
 """Batch and acquisition QC previews from externally produced enface tiles.
 
-No processing milestones are mutated. Local manifests permit resumable previews.
-Run only one preview watcher for a given project/slice/mosaic at a time.
+The maps are found through the project's input naming: acquisition.filename_pattern
+(with a {modality} placeholder) and filename_modality_map labels mapped to aip, mip,
+ori and ret (required) and surf (when mapped). Only JPEGs are written. No processing
+milestones are mutated. Local manifests permit resumable previews. Run only one
+preview watcher for a given project/slice/mosaic at a time.
 """
 import hashlib
 import json
 import os
 from pathlib import Path
-import re
-from string import Formatter
 import tempfile
 import time
 
@@ -22,29 +23,38 @@ from opticstream.data_processing.qc.convert_image import convert_image
 from opticstream.flows.psoct.utils import get_slice_paths, mosaic_context_from_ident
 from opticstream.state.oct_project_state import OCTMosaicId
 from opticstream.tasks.slack_notification import upload_multiple_files_to_slack
+from opticstream.utils.oct_input_naming import compile_pattern
 from opticstream.utils.slack_settings import slack_notifications_enabled
 
-MODALITIES = ("aip", "mip", "ori", "ret")
+REQUIRED_MODALITIES = ("aip", "mip", "ori", "ret")
+# Previewed only when filename_modality_map has a label for it.
+OPTIONAL_MODALITIES = ("surf",)
+MODALITIES = REQUIRED_MODALITIES + OPTIONAL_MODALITIES
+
+# linc-convert traversal of the acquisition grid: strips of grid_size_y tiles run
+# along columns, snaking, starting bottom-left. The same for every scanner.
+GRID_TYPE = "snake-by-columns"
+GRID_ORDER = "up-right"
 
 
-def _image_regex(pattern, values, *, any_padding):
-    """Regex for a preview pattern with {image} as a digits group, or None.
+def preview_modalities(config):
+    """Modalities previewed for this project: the required four plus mapped optional ones."""
+    mapped = set(config.acquisition.filename_modality_map.values())
+    return REQUIRED_MODALITIES + tuple(m for m in OPTIONAL_MODALITIES if m in mapped)
 
-    Returns None when ``any_padding`` is False and {image} has an explicit
-    format spec (e.g. {image:04d}), which keeps exact rendering.
-    """
-    parts = []
-    for literal, field, spec, conversion in Formatter().parse(pattern):
-        parts.append(re.escape(literal))
-        if field is None:
-            continue
-        if field == "image":
-            if (spec or conversion) and not any_padding:
-                return None
-            parts.append(r"(?P<image>[0-9]+)")
-        else:
-            parts.append(re.escape(format(values[field], spec)))
-    return re.compile("".join(parts))
+
+def naming_error(config):
+    """Why the input naming cannot locate enface maps, or None when it can."""
+    pattern = config.acquisition.filename_pattern
+    if not pattern:
+        return "acquisition.filename_pattern is not set"
+    if "modality" not in compile_pattern(pattern).groupindex:
+        return "acquisition.filename_pattern has no {modality} placeholder"
+    mapped = set(config.acquisition.filename_modality_map.values())
+    missing = [m for m in REQUIRED_MODALITIES if m not in mapped]
+    if missing:
+        return f"acquisition.filename_modality_map has no label for {', '.join(missing)}"
+    return None
 
 
 def list_names(root):
@@ -55,33 +65,36 @@ def list_names(root):
         return []
 
 
-def image_numbers_present(pattern, values, names):
-    """Image numbers of files matching ``pattern``, whatever their padding."""
-    regex = _image_regex(pattern, values, any_padding=True)
-    return {int(found["image"]) for name in names if (found := regex.fullmatch(name))}
+def enface_files(config, names, *, acquisition=None, slice_id=None):
+    """Map (modality, image number) -> file name for the enface maps in ``names``.
 
-
-def _padded_image_matches(pattern, values, names):
-    """Map image number -> filename for a pattern whose {image} has no format spec.
-
-    Like filename_pattern, a bare {image} matches any zero padding (1, 01, 0001),
-    compared as a number. Returns None when {image} has an explicit format spec
-    (e.g. {image:04d}), which keeps exact rendering.
+    Names are parsed with acquisition.filename_pattern; the {modality} label is
+    translated by filename_modality_map. When the pattern has {acq} or
+    {slice}, only names for ``acquisition`` / ``slice_id`` are kept.
     """
-    regex = _image_regex(pattern, values, any_padding=False)
-    if regex is None:
-        return None
-    matches = {}
+    error = naming_error(config)
+    if error:
+        raise ValueError(f"Enface previews need the input naming to cover them: {error}")
+    acq = config.acquisition
+    regex = compile_pattern(acq.filename_pattern)
+    found = {}
     for name in names:
-        found = regex.fullmatch(name)
-        if found is None:
+        match = regex.fullmatch(name)
+        if match is None:
             continue
-        number = int(found["image"])
-        if number in matches:
-            raise ValueError(f"Several files match image {number} of {pattern!r}: "
-                             f"{matches[number]}, {name}")
-        matches[number] = name
-    return matches
+        values = match.groupdict()
+        modality = acq.filename_modality_map.get(values["modality"])
+        if modality not in MODALITIES:
+            continue
+        if acquisition is not None and values.get("acq", acquisition) != acquisition:
+            continue
+        if slice_id is not None and int(values.get("slice", slice_id)) != slice_id:
+            continue
+        key = (modality, int(values["image"]))
+        if key in found:
+            raise ValueError(f"Several {modality} files for image {key[1]}: {found[key]}, {name}")
+        found[key] = name
+    return found
 
 
 def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None, *,
@@ -89,8 +102,9 @@ def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None, 
     """Return exact expected paths, never infer completeness from file counts.
 
     ``image_offset`` shifts filename image numbers for continuously numbered
-    acquisitions (tile 1 of this mosaic is image first_image + image_offset).
+    acquisitions (tile 1 of this mosaic is image 1 + image_offset).
     ``names`` is an optional pre-read listing of ``input_dir``.
+    Missing tiles get a path that does not exist, so callers see them as absent.
     """
     context = mosaic_context_from_ident(mosaic_ident, config)
     rows = context.grid_size_y(config)
@@ -99,27 +113,16 @@ def expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id=None, 
         raise ValueError(f"batch_id must be between 1 and {columns}")
     indices = range(columns * rows) if batch_id is None else range((batch_id - 1) * rows, batch_id * rows)
     root = Path(input_dir).resolve()
-    values = dict(slice=mosaic_ident.slice_id, mosaic=mosaic_ident.mosaic_id,
-                  acquisition=acquisition, project=mosaic_ident.project_name)
     if names is None:
         names = list_names(root)
+    found = enface_files(config, names, acquisition=acquisition, slice_id=mosaic_ident.slice_id)
     result = {}
-    for modality in MODALITIES:
-        pattern = getattr(config.enface_preview, f"{modality}_pattern")
-        existing = _padded_image_matches(pattern, values, names)
+    for modality in preview_modalities(config):
         paths = {}
         for index in indices:
-            image = index + config.enface_preview.first_image + image_offset
-            # Missing tiles keep the unpadded name so callers still see them as absent.
-            name = (existing or {}).get(image) or pattern.format(image=image, **values)
-            path = (root / name).resolve()
-            if path.parent != root:
-                raise ValueError("Rendered preview filename must remain inside the input directory")
-            paths[index] = path
+            image = index + 1 + image_offset
+            paths[index] = root / (found.get((modality, image)) or f"missing_{modality}_image_{image:04d}")
         result[modality] = paths
-    all_paths = [p for paths in result.values() for p in paths.values()]
-    if len(set(all_paths)) != len(all_paths):
-        raise ValueError("Preview patterns must identify distinct modality/tile files")
     return result
 
 
@@ -131,7 +134,7 @@ def fingerprint(config, files):
             if not path.is_file() or stat.st_size == 0:
                 raise ValueError(f"Empty or invalid tile: {path}")
             records.append((modality, index, str(path), stat.st_size, stat.st_mtime_ns))
-    settings = (config.enface_preview.model_dump(mode="json"), config.acquisition.model_dump(mode="json"))
+    settings = (GRID_TYPE, GRID_ORDER, config.acquisition.model_dump(mode="json"))
     return hashlib.sha256(json.dumps([records, settings], sort_keys=True).encode()).hexdigest()
 
 
@@ -204,14 +207,11 @@ def tile_config(config, files, shape, overlap, out, per_strip=None):
     """
     from linc_convert.modalities.psoct.generate_tile_config import generate_tile_config
 
-    grid = config.enface_preview.grid_config
     per_strip = per_strip or config.acquisition.grid_size_y
     strips = max(files) // per_strip + 1
-    row_based = grid.grid_type in {"row-by-row", "snake-by-rows"}
-    columns, rows = (per_strip, strips) if row_based else (strips, per_strip)
-    generate_tile_config(columns=columns, rows=rows, tile_size_x=shape[0], tile_size_y=shape[1],
-                         base_dir="", naming_format="{tile_number}", grid_type=grid.grid_type,
-                         order=grid.order, overlap_percentage=overlap, out=str(out))
+    generate_tile_config(columns=strips, rows=per_strip, tile_size_x=shape[0], tile_size_y=shape[1],
+                         base_dir="", naming_format="{tile_number}", grid_type=GRID_TYPE,
+                         order=GRID_ORDER, overlap_percentage=overlap, out=str(out))
     spec = yaml.safe_load(Path(out).read_text())
     tiles = [tile for tile in spec["tiles"] if tile["tile_number"] - 1 in files]
     x0 = min(tile["x"] for tile in tiles)
@@ -233,10 +233,11 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
                             per_strip: int | None = None) -> Path:
     """Stitch acquisition tiles in place with linc-convert generate_tile_config + mosaic2d.
 
-    Writes ``output`` (NIfTI), a JPEG next to it, and a ``*_grid.jpg`` tile diagram.
-    Tiles are copied to a scratch directory only when they need converting:
-    radian orientation maps (linc-convert expects degrees) and plain 2D maps
-    (mosaic2d writes 3D voxel sizes, so tiles keep a singleton third axis).
+    Writes only the ``output`` JPEG; the stitched NIfTI mosaic2d produces stays in a
+    scratch directory that is removed afterwards. Tiles are copied to that scratch
+    directory only when they need converting: radian orientation maps (linc-convert
+    expects degrees) and plain 2D maps (mosaic2d writes 3D voxel sizes, so tiles
+    keep a singleton third axis).
     """
     from opticstream.data_processing.qc.convert_image import load_data
     from linc_convert.modalities.psoct.mosaic import mosaic2d
@@ -250,9 +251,10 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
     for index, other in shapes.items():
         if other != shape:
             raise ValueError(f"Tile dimensions differ: {files[index]}, {other} != {shape}")
-    to_degrees = modality == "ori" and config.enface_preview.orientation_units == "radians"
-    jpeg = output.with_suffix(".jpg")
+    to_degrees = modality == "ori" and config.acquisition.orientation_units == "radians"
+    jpeg = output
     with tempfile.TemporaryDirectory(prefix="enface-preview-", dir=output.parent) as scratch:
+        stitched = Path(scratch) / f"{modality}.nii"
         sources = dict(files)
         for index, path in files.items():
             is_nifti = path.name.lower().endswith((".nii", ".nii.gz"))
@@ -267,35 +269,36 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
             nib.save(nib.Nifti1Image(array, np.eye(4)), sources[index])
         spec = tile_config(config, sources, shape, overlap, Path(scratch) / "tiles.yaml",
                            per_strip)
-        mosaic2d(tile_info_file=str(spec), nifti_output=str(output),
+        mosaic2d(tile_info_file=str(spec), nifti_output=str(stitched),
                  jpeg_output=None if modality == "ori" else str(jpeg),
                  #print_grid=str(output.with_name(f"{output.stem}_grid.jpg")),
                  tile_overlap=overlap if overlap else 0, circular_mean=modality == "ori",
                  voxel_size_xyz=list(config.acquisition.scan_resolution_3d[:2]))
-    if not output.is_file():
-        raise RuntimeError(f"mosaic2d did not produce {output}")
-    if modality == "ori":
-        # mosaic2d's JPEG is grayscale; orientation previews use an angle colormap.
-        # Transpose to match the orientation of mosaic2d's JPEGs.
-        angles = np.asarray(nib.load(output).dataobj).squeeze().T
-        convert_image(data=angles, output=jpeg, angle_to_rgb=True, output_format="jpg")
+        if not stitched.is_file():
+            raise RuntimeError(f"mosaic2d did not produce the stitched {modality} mosaic")
+        if modality == "ori":
+            # mosaic2d's JPEG is grayscale; orientation previews use an angle colormap.
+            # Transpose to match the orientation of mosaic2d's JPEGs.
+            # mmap=False: a memory-mapped scratch file cannot be deleted on Windows.
+            angles = np.asarray(nib.load(stitched, mmap=False).dataobj).squeeze().T
+            convert_image(data=angles, output=jpeg, angle_to_rgb=True, output_format="jpg")
+    if not jpeg.is_file():
+        raise RuntimeError(f"mosaic2d did not produce {jpeg}")
     return jpeg
 
 
 def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None, *, image_offset=0):
-    enabled = config.enface_preview.acquisition_enabled if batch_id is None else config.enface_preview.batch_enabled
-    if not enabled:
-        return {}
-    files = expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id,
+    files =expected_tiles(config, mosaic_ident, input_dir, acquisition, batch_id,
                            image_offset=image_offset)
     signature = fingerprint(config, files)
     progress_file = progress_path(config, mosaic_ident, batch_id)
     progress = read_progress(progress_file, signature)
-    outputs = {m: preview_path(config, mosaic_ident, batch_id, f"{m}.nii") for m in MODALITIES}
+    modalities = list(files)
+    outputs = {m: preview_path(config, mosaic_ident, batch_id, f"{m}.jpg") for m in modalities}
     per_strip = mosaic_context_from_ident(mosaic_ident, config).grid_size_y(config)
-    for modality in MODALITIES:
+    for modality in modalities:
         output = outputs[modality]
-        if modality not in progress["stitched"] or not output.with_suffix(".jpg").exists() or not output.exists():
+        if modality not in progress["stitched"] or not output.exists():
             stitch_preview_modality(config, files[modality], modality, output, batch_id,
                                     per_strip=per_strip)
             if fingerprint(config, files) != signature:
@@ -304,9 +307,9 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None, *, 
                 progress["stitched"].append(modality)
             save_progress(progress_file, progress)
     if slack_notifications_enabled():
-        remaining = [m for m in MODALITIES if m not in progress["uploaded"]]
+        remaining = [m for m in modalities if m not in progress["uploaded"]]
         if remaining:
-            paths = [str(outputs[m].with_suffix(".jpg")) for m in remaining]
+            paths = [str(outputs[m]) for m in remaining]
             scope = "full acquisition" if batch_id is None else f"batch {batch_id}"
             label = f"{mosaic_ident.project_name}, slice {mosaic_ident.slice_id}, mosaic {mosaic_ident.mosaic_id}, {acquisition}, {scope}"
             results = upload_multiple_files_to_slack(filepaths=paths,
@@ -317,7 +320,7 @@ def run_preview(config, mosaic_ident, input_dir, acquisition, batch_id=None, *, 
             save_progress(progress_file, progress)
             if any(not results.get(path) for path in paths):
                 raise RuntimeError("Some preview Slack uploads failed; successful uploads are checkpointed")
-    return {m: str(outputs[m].with_suffix(".jpg")) for m in MODALITIES}
+    return {m: str(outputs[m]) for m in modalities}
 
 
 @flow(name="preview-enface-batch")

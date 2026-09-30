@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from opticstream.cli.oct.watch import build_watch_previews
-from opticstream.config.enface_preview import EnfacePreviewConfig
 from opticstream.config.psoct_scan_config import PSOCTAcquisitionParams
 from opticstream.flows.psoct import mosaic_enface_qc_flow as qc
 from opticstream.state.oct_project_state import OCTMosaicId
@@ -15,22 +14,14 @@ from opticstream.utils import polling_watcher
 from opticstream.utils.polling_watcher import PollingStableWatcher
 
 
-def scan_config(root, **preview):
-    preview.setdefault("batch_enabled", True)
-    preview.setdefault("grid_config", {"grid_type": "column-by-column", "order": "down-right"})
+def scan_config(root, pattern="{acq}_{modality}_{image}.nii"):
     return SimpleNamespace(
         project_base_path=Path(root) / "out",
         mosaics_per_slice=2,
-        enface_preview=EnfacePreviewConfig(
-            aip_pattern="{acquisition}_aip_{image}.nii",
-            mip_pattern="{acquisition}_mip_{image}.nii",
-            ori_pattern="{acquisition}_ori_{image}.nii",
-            ret_pattern="{acquisition}_ret_{image}.nii",
-            **preview,
-        ),
         acquisition=PSOCTAcquisitionParams(
             grid_size_y=2, grid_size_x_normal=2, grid_size_x_tilted=3, tile_overlap=0,
             acquisition_mosaic_map={"normal0deg": 1, "tilted15deg": 2},
+            filename_pattern=pattern,
         ),
     )
 
@@ -56,9 +47,16 @@ class WatchPreviewTests(unittest.TestCase):
         self.assertIsNone(self.build(cfg, fixed_slice_id=None))
         self.assertIsNone(self.build(cfg, fixed_mosaic_slot=None))
 
-    def test_disabled_in_block(self):
-        cfg = scan_config(self.root, batch_enabled=False, acquisition_enabled=False)
-        self.assertIsNone(self.build(cfg))
+    def test_disabled_by_flags(self):
+        cfg = scan_config(self.root)
+        self.assertIsNone(self.build(cfg, acquisition_previews=False, batch_previews=False))
+        worker = self.worker_of(self.build(cfg, acquisition_previews=False, batch_previews=True))
+        self.assertEqual(worker.candidates, [1, 2])
+
+    def test_naming_without_modality_turns_previews_off(self):
+        # Watching continues without previews rather than failing.
+        self.assertIsNone(self.build(scan_config(self.root, "{acq}_{image}_spectral.nii")))
+        self.assertIsNone(self.build(scan_config(self.root, None)))
 
     def test_acquisition_label_and_slice_offset(self):
         cfg = scan_config(self.root)
@@ -100,7 +98,8 @@ class CompanionTests(unittest.TestCase):
         from opticstream.cli.oct.watch_enface import EnfacePreviewWatcher
         with TemporaryDirectory() as temp:
             worker = EnfacePreviewWatcher(scan_config(temp), OCTMosaicId(
-                project_name="proj", slice_id=1, mosaic_id=1), temp, "normal0deg")
+                project_name="proj", slice_id=1, mosaic_id=1), temp, "normal0deg",
+                batch_previews=True)
         self.assertEqual(worker.candidates, [None, 1, 2])
 
 
