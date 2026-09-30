@@ -85,6 +85,7 @@ class ArchiveComplexTests(unittest.TestCase):
                 return SimpleNamespace(result=lambda: archive_flow.archive_file.fn(local, out))
 
             with patch.object(archive_flow, "get_run_logger", return_value=Mock()), \
+                 patch.object(archive_flow, "OCT_STATE_SERVICE") as state, \
                  patch("opticstream.tasks.archive_file.get_run_logger", return_value=Mock()), \
                  patch.object(archive_flow.archive_file, "submit", side_effect=submit), \
                  patch.object(archive_flow, "check_archive_result", return_value=[]):
@@ -102,6 +103,8 @@ class ArchiveComplexTests(unittest.TestCase):
                 self.assertEqual(f.read(), b"jones5")
             self.assertEqual(list(complex_dir.iterdir()), [])
             self.assertTrue(all(Path(p).is_file() for p in archived))
+            # A re-archive makes the complex upload run again.
+            state.open_batch.return_value.__enter__.return_value.reset_complex_uploaded.assert_called_once()
 
     def test_failed_validation_keeps_uncompressed_copies(self):
         with TemporaryDirectory() as root:
@@ -110,6 +113,7 @@ class ArchiveComplexTests(unittest.TestCase):
             local.write_bytes(b"jones")
             batch = OCTBatchId(project_name="sub-T", slice_id=1, mosaic_id=1, batch_id=1)
             with patch.object(archive_flow, "get_run_logger", return_value=Mock()), \
+                 patch.object(archive_flow, "OCT_STATE_SERVICE"), \
                  patch.object(archive_flow.archive_file, "submit",
                               return_value=SimpleNamespace(result=lambda: root / "a.nii.gz")), \
                  patch.object(archive_flow, "check_archive_result", return_value=["a.nii.gz (small)"]):
@@ -124,6 +128,7 @@ class ArchiveComplexTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             batch = OCTBatchId(project_name="sub-T", slice_id=1, mosaic_id=1, batch_id=1)
             with patch.object(archive_flow, "get_run_logger", return_value=Mock()), \
+                 patch.object(archive_flow, "OCT_STATE_SERVICE"), \
                  patch.object(archive_flow.archive_file, "submit") as submit:
                 with self.assertRaises(FileNotFoundError):
                     archive_flow.archive_complex_tiles.fn(
@@ -131,6 +136,41 @@ class ArchiveComplexTests(unittest.TestCase):
                         archive_path=Path(root), complex_tile_name_format="{tile_id}.nii.gz",
                         complex_dir=Path(root))
             submit.assert_not_called()
+
+
+class RawArchiveFlowTests(unittest.TestCase):
+    """Raw-tile archive runs as its own flow, independent of MATLAB processing."""
+
+    def run_flow(self, cfg):
+        batch = OCTBatchId(project_name="sub-T", slice_id=1, mosaic_id=1, batch_id=2)
+        refs = {1: SimpleNamespace(tile_number=1)}
+        with patch.object(archive_flow, "get_run_logger", return_value=Mock()), \
+             patch.object(archive_flow, "build_tile_file_reference_list",
+                          return_value=refs) as build, \
+             patch.object(archive_flow, "archive_tile_batch") as archive:
+            archive_flow.archive_tile_batch_flow.fn(
+                batch_id=batch, config=cfg, file_list=[Path("a.nii")], force_rerun=True)
+        return batch, build, archive
+
+    def test_archives_even_when_matlab_disabled(self):
+        with TemporaryDirectory() as root:
+            cfg = scan_config(root).model_copy(update={"matlab_processing_enabled": False})
+            batch, _, archive = self.run_flow(cfg)
+            archive.assert_called_once()
+            kwargs = archive.call_args.kwargs
+            self.assertEqual(kwargs["batch_id"], batch)
+            self.assertEqual(kwargs["archive_path"], cfg.archive_path)
+            self.assertEqual(kwargs["acquisition_label"], "normal")
+            self.assertTrue(kwargs["force_rerun"])
+
+    def test_no_archive_path_is_a_no_op(self):
+        with TemporaryDirectory() as root:
+            _, build, archive = self.run_flow(scan_config(root, archive=False))
+            build.assert_not_called()
+            archive.assert_not_called()
+
+    def test_process_flow_no_longer_archives_raw_tiles(self):
+        self.assertFalse(hasattr(process_flow, "archive_tile_batch"))
 
 
 if __name__ == "__main__":

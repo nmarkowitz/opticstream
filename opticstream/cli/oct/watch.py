@@ -16,6 +16,7 @@ from opticstream.config.psoct_scan_config import (
 )
 from opticstream.events import BATCH_READY
 from opticstream.events.psoct_event_emitters import emit_batch_psoct_event
+from opticstream.flows.psoct.tile_batch_archive_flow import archive_tile_batch_flow
 from opticstream.flows.psoct.tile_batch_process_flow import process_tile_batch
 from opticstream.flows.psoct.utils import oct_batch_ident
 from opticstream.flows.psoct.utils import (
@@ -660,6 +661,18 @@ class OCTWatcherService:
             candidate.logical_batch,
             len(candidate.files),
         )
+
+        # Archive (and its upload event) must not depend on MATLAB processing, and
+        # an archive failure must not block processing.
+        try:
+            archive_tile_batch_flow(
+                batch_id=batch_ident,
+                config=self.scan_config,
+                file_list=list(candidate.files),
+                force_rerun=self.force_resend,
+            )
+        except Exception:
+            logger.exception("Archive failed for %s; continuing with processing", batch_ident)
 
         process_tile_batch(
             batch_id=batch_ident,

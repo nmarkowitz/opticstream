@@ -5,11 +5,12 @@ Summary: Add your description here
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: cyclopts>=3.3.0
-Requires-Dist: linc-convert[all] @ git+https://github.com/lincbrain/linc-convert.git@dc8f3243df01d09493a13e53305adede08784695
+Requires-Dist: linc-convert[all] @ git+https://github.com/nmarkowitz/linc-convert.git@e00f6f31cd8bac5e2fa34b212d2d77817bfb6f81
 Requires-Dist: nifti-zarr @ git+https://github.com/calvinchai/nifti-zarr-py.git@12336420beaa023cbdd9d9e5c24e3c115687fe9a
 Requires-Dist: psoct-toolbox @ git+https://github.com/calvinchai/psoct-toolbox.git@5182337044d2b7f8337ca205a33c9da3ddd69bda
 Requires-Dist: matplotlib>=3.10.8
 Requires-Dist: prefect[shell,slack,sqlalchemy]>=3.6.20
+Requires-Dist: dandi>=0.78.0
 Requires-Dist: watchdog
 Requires-Dist: psutil
 Requires-Dist: slack-sdk

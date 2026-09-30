@@ -14,8 +14,7 @@ from opticstream.config.psoct_scan_config import PSOCTScanConfigModel, TileSavin
 from opticstream.events import BATCH_PROCESSED, BATCH_READY, get_event_trigger
 from opticstream.flows.psoct.tile_batch_archive_flow import (
     archive_complex_tiles,
-    archive_tile_batch,
-    emit_batch_archived,
+    emit_batch_complex_archived,
 )
 from opticstream.flows.psoct.tile_batch_processed_validation import (
     validate_processed_batch_outputs,
@@ -266,21 +265,10 @@ def process_tile_batch(
     mode = _determine_processing_mode(
         tile_saving_type=config.acquisition.tile_saving_type,
     )
-    # Complex tiles join the raw tiles in one BATCH_ARCHIVED event (one DANDI upload).
+    # Raw tiles are archived by the separate archive_tile_batch_flow (also on
+    # BATCH_READY). Complex tiles are MATLAB output, so they are archived here and
+    # uploaded on their own BATCH_COMPLEX_ARCHIVED event.
     complex_dir = complex_output_dir_for_batch(config, mode, batch_id.slice_id)
-    save_complex = complex_dir is not None
-
-    archive_future = None
-    if config.archive_path:
-        archive_future = archive_tile_batch.submit(
-            batch_id=batch_id,
-            file_reference_list=file_reference_list,
-            acquisition_label=mosaic_context.acquisition_label,
-            archive_path=config.archive_path,
-            archive_tile_name_format=config.archive_tile_name_format,
-            force_rerun=force_rerun,
-            emit_event=not save_complex,
-        )
 
     processed_path: Path | None = None
     if mode == "spectral":
@@ -307,8 +295,7 @@ def process_tile_batch(
         )
     
 
-    if archive_future and save_complex:
-        raw_archived = archive_future.result()
+    if complex_dir is not None:
         complex_archived = archive_complex_tiles(
             batch_id=batch_id,
             file_reference_list=file_reference_list,
@@ -317,9 +304,7 @@ def process_tile_batch(
             complex_tile_name_format=config.complex_tile_name_format,
             complex_dir=complex_dir,
         )
-        emit_batch_archived(batch_id, raw_archived + complex_archived)
-    elif archive_future:
-        archive_future.wait()
+        emit_batch_complex_archived(batch_id, complex_archived)
     with OCT_STATE_SERVICE.open_batch(batch_ident=batch_id) as batch_state:
         batch_state.mark_completed()
 

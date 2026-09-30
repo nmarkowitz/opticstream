@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "cyclopts>=3.3.0",
-    "linc-convert[all] @ git+https://github.com/nmarkowitz/linc-convert.git@050bd354e166b14fb5bca244e94107d559e0aa0a",
+    "linc-convert[all] @ git+https://github.com/nmarkowitz/linc-convert.git@e00f6f31cd8bac5e2fa34b212d2d77817bfb6f81",
     "nifti-zarr @ git+https://github.com/calvinchai/nifti-zarr-py.git@12336420beaa023cbdd9d9e5c24e3c115687fe9a",
     "psoct-toolbox @ git+https://github.com/calvinchai/psoct-toolbox.git@5182337044d2b7f8337ca205a33c9da3ddd69bda",
     "matplotlib>=3.10.8",
@@ -38,6 +38,13 @@ dev = [
 [project.scripts]
 opticstream = "opticstream.cli:main"
 ops = "opticstream.cli:main"
+
+[tool.uv]
+# linc-convert requires nifti-zarr ^1.0.0rc7, but this untagged fork builds as
+# "0+unknown". The fork is needed for niizarr.multizarr / ZarrConfig.
+override-dependencies = [
+    "nifti-zarr @ git+https://github.com/calvinchai/nifti-zarr-py.git@12336420beaa023cbdd9d9e5c24e3c115687fe9a",
+]
 
 [tool.uv.sources]
 #linc-convert = { path = "/space/megaera/1/users/kchai/linc-convert", editable = true }

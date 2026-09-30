@@ -269,7 +269,7 @@ def stitch_preview_modality(config: PSOCTScanConfigModel, files: dict[int, Path]
                            per_strip)
         mosaic2d(tile_info_file=str(spec), nifti_output=str(output),
                  jpeg_output=None if modality == "ori" else str(jpeg),
-                 print_grid=str(output.with_name(f"{output.stem}_grid.jpg")),
+                 #print_grid=str(output.with_name(f"{output.stem}_grid.jpg")),
                  tile_overlap=overlap if overlap else 0, circular_mean=modality == "ori",
                  voxel_size_xyz=list(config.acquisition.scan_resolution_3d[:2]))
     if not output.is_file():
