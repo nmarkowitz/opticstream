@@ -65,7 +65,7 @@ def stitch_mosaic_volume_task(
     crop_focus_plane_offset: int = 30,
     voxel_size_xyz: Sequence[float] = (0.01, 0.01, 0.0025),
     circular_mean: bool = False,
-    zarr_size_threshold: int = 10**9,
+    zarr_size_threshold: int = 1,#10**9,
     validate_zarr_output: bool = True,
 ) -> Path:
     """

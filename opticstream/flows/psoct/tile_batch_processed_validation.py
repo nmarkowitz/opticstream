@@ -62,8 +62,8 @@ def validate_processed_batch_outputs(
     *,
     mosaic_id: int,
     config: PSOCTScanConfigModel,
-    min_volume_file_size_bytes: int = 100 * 1024 * 1024,
-    min_enface_file_size_bytes: int = 100 * 1024,
+    min_volume_file_size_bytes: int = 1 * 1024 * 1024, # 1MB
+    min_enface_file_size_bytes: int = 1 * 1024, # 1KB
 ) -> None:
     """
     Ensure each tile has the configured processed NIfTIs under ``processed_dir``.

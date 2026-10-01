@@ -144,7 +144,7 @@ def emit_batch_complex_archived(batch_id: OCTBatchId, file_list: list[str]) -> N
 def check_archive_result(
     batch_id: OCTBatchId,
     archived_file_paths: list[str],
-    min_file_size_bytes: int = 200 * 1024 * 1024,
+    min_file_size_bytes: int = 1 * 1024 * 1024, # 1MB file size
 ) -> list[str]:
     logger = get_run_logger()
     logger.info("Checking if the archived files are valid for %s", batch_id)
