@@ -26,41 +26,58 @@ def show(
     slice: int | None = None,
     mosaic: int | None = None,
     batch: int | None = None,
+    no_batches: Annotated[
+        bool,
+        Parameter(
+            name=["--no-batches"],
+            negative="",
+            help="Omit batch entries, showing only slice and mosaic state.",
+        ),
+    ] = False,
 ) -> None:
     """
     Show OCT project state as pretty JSON.
 
     Examples:
     - opticstream oct state show myproject
+    - opticstream oct state show myproject --no-batches
     - opticstream oct state show myproject --slice 1
     - opticstream oct state show myproject --slice 1 --mosaic 1
     - opticstream oct state show myproject --slice 1 --mosaic 1 --batch 1
     """
+    if no_batches and batch is not None:
+        raise ValueError("`--no-batches` cannot be used with `--batch`.")
     if batch is not None and mosaic is None:
         raise ValueError("`--mosaic` is required when `--batch` is provided.")
     if mosaic is not None and slice is None:
         raise ValueError("`--slice` is required when `--mosaic` is provided.")
 
+    # Pydantic exclude specs that drop `batches` at whichever level is shown.
+    exclude_batches = {"mosaics": {"__all__": {"batches"}}}
+    exclude = None
     with OCT_STATE_SERVICE.open_project_by_parts(project_name=project_name) as project:
         if slice is None:
             view = project.to_view()
+            exclude = {"slices": {"__all__": exclude_batches}}
         elif mosaic is None:
             slice_state = project.get_slice(slice)
             if slice_state is None:
                 raise ValueError(f"Slice not found: slice={slice}")
             view = slice_state.to_view()
+            exclude = exclude_batches
         elif batch is None:
             mosaic_state = project.get_mosaic(slice, mosaic)
             if mosaic_state is None:
                 raise ValueError(f"Mosaic not found: slice={slice}, mosaic={mosaic}")
             view = mosaic_state.to_view()
+            exclude = {"batches"}
         else:
             batch_state = project.get_batch(slice, mosaic, batch)
             if batch_state is None:
                 raise ValueError(f"Batch not found: slice={slice}, mosaic={mosaic}, batch={batch}")
             view = batch_state.to_view()
 
-    print(view.model_dump_json(indent=2))
+    print(view.model_dump_json(indent=2, exclude=exclude if no_batches else None))
 
 
 @oct_state_cli.command
