@@ -111,21 +111,21 @@ class PSOCTAcquisitionParams(BaseModel):
         ...,
         ge=1,
         description=(
-            "Number of batches (columns) per mosaic for normal illumination (required)"
+            "Number of batches (rows) per mosaic for normal illumination (required)"
         ),
     )
     grid_size_x_tilted: int = Field(
         ...,
         ge=1,
         description=(
-            "Number of batches (columns) per mosaic for tilted illumination (required)"
+            "Number of batches (rows) per mosaic for tilted illumination (required)"
         ),
     )
     grid_size_y: int = Field(
         ...,
         ge=1,
         description=(
-            "Number of tiles per batch (rows) - determines batch size (required). "
+            "Number of tiles per batch (columns) - determines batch size (required). "
             "Used for normal illumination, and for tilted unless grid_size_y_tilted is set"
         ),
     )
@@ -133,7 +133,7 @@ class PSOCTAcquisitionParams(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Number of tiles per batch (rows) for tilted illumination; "
+            "Number of tiles per batch (columns) for tilted illumination; "
             "unset uses grid_size_y"
         ),
     )
