@@ -63,12 +63,44 @@ def parse_acq_mosaic_map(value: str) -> dict[str, int]:
     return mapping
 
 
-@oct_cli.command
-def update_block() -> None:
-    """
-    Update the PSOCTScanConfig block.
-    """
+def register_block_type() -> None:
+    """Register the current PSOCTScanConfig block type and schema with Prefect."""
     PSOCTScanConfig.register_type_and_schema()
+
+
+@oct_cli.command
+def update_block(*project_names: str) -> None:
+    """
+    Update PSOCTScanConfig blocks to the current schema.
+
+    Registers the current schema, then re-saves each saved block (all of them,
+    or only ``project_names``) so it uses that schema: new fields get their
+    defaults and appear in the Prefect UI. Values already set are kept.
+    """
+    from prefect.client.orchestration import get_client
+
+    register_block_type()
+    if project_names:
+        names = [get_psoct_scan_config_block_name(p) for p in project_names]
+    else:
+        with get_client(sync_client=True) as client:
+            names = sorted(
+                d.name
+                for d in client.read_block_documents_by_type(
+                    PSOCTScanConfig.get_block_type_slug()
+                )
+            )
+    failed = []
+    for name in names:
+        try:
+            PSOCTScanConfig.load(name).save(name, overwrite=True)
+        except Exception as exc:
+            failed.append(name)
+            print(f"Could not update block {name}: {exc}")
+            continue
+        print(f"Updated block {name}")
+    if failed:
+        raise SystemExit(f"{len(failed)} block(s) not updated: {', '.join(failed)}")
 
 
 @oct_cli.command
@@ -143,7 +175,7 @@ def setup(
         ``{subject}``, ``{modality}``, ``{extension}``. Quote it in the shell,
         e.g. ``'spectral_{image}.nii'``.
     """
-    update_block()
+    register_block_type()
     ensure_lock(project_name)
 
     block_name = get_psoct_scan_config_block_name(project_name)

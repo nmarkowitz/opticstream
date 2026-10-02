@@ -44,7 +44,7 @@ Valid `FLOW_NAME` values for `opticstream deploy` are:
 |---------|---------|
 | `opticstream oct setup PROJECT_NAME ...` | Create/update project PS-OCT block and lock. |
 | `opticstream oct create-lock PROJECT_NAME` | Ensure project-scoped OCT state lock exists. |
-| `opticstream oct update-block` | Register/update `PSOCTScanConfig` block type metadata. |
+| `opticstream oct update-block [PROJECT...]` | Register the current `PSOCTScanConfig` schema and re-save saved blocks (all, or the named projects) onto it so new fields appear in the Prefect UI. |
 | `opticstream oct watch PROJECT_NAME FOLDER_PATH [MOSAIC_RANGES] ...` | Watch spectral data and dispatch batch processing (direct or event mode). |
 | `opticstream oct deploy ...` | Create Prefect deployments from in-repo flow sources. |
 | `opticstream oct serve register ...` | Serve registration/dependent OCT flows for local execution. |
