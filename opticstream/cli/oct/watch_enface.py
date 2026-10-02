@@ -110,7 +110,7 @@ class SequencePreviewWatcher:
 
     def _positions(self, last_image):
         """Start of each mosaic from the sequence start through ``last_image``."""
-        image = 1
+        image = self.sequence.start_image
         while image <= last_image:
             position = self.sequence.locate(image)
             yield position

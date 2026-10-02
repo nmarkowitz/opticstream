@@ -114,6 +114,12 @@ class OCTStateMutationsMixin:
         self.processing_finished_at = now
         self.updated_at = now
 
+    def mark_pending(self) -> None:
+        self.processing_state = ProcessingState.PENDING
+        self.processing_started_at = None
+        self.processing_finished_at = None
+        self.touch()
+
 
 class OCTBatchStateView(OCTStateView):
     """
@@ -344,12 +350,36 @@ class OCTSliceState(
         self.touch()
 
 
+class OCTSequenceAnchor(BaseModel):
+    """
+    Where continuous image numbering (e.g. ``spectral_{image}.nii``) starts.
+
+    Written by ``ops oct watch``: ``start_image`` in ``folder`` is tile 1 of
+    ``mosaic_slot`` (position within the slice) of ``slice_id``, both before
+    ``--slice-offset`` is applied. Images numbered below ``start_image`` are ignored.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    folder: str
+    start_image: int = Field(default=1, ge=1)
+    slice_id: int = Field(..., ge=1)
+    mosaic_slot: int = Field(..., ge=1)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class OCTProjectStateView(OCTStateView):
     """
     Readonly view of the entire persisted OCT state for one project.
     """
 
     slices: dict[int, OCTSliceStateView] = Field(default_factory=dict)
+    sequence_anchor: OCTSequenceAnchor | None = None
+
+    def last_mosaic_id(self) -> int | None:
+        """Highest mosaic id with at least one batch recorded, or None."""
+        ids = [mosaic.mosaic_id for mosaic in self.iter_mosaics() if mosaic.batches]
+        return max(ids, default=None)
 
     def get_batch(
         self,
@@ -452,6 +482,32 @@ class OCTProjectState(
         del mosaic_state.batches[batch_id]
         self.touch()
         return True
+
+    def clear_from_mosaic(self, slice_id: int, mosaic_id: int) -> list[tuple[int, int]]:
+        """
+        Delete mosaic ``mosaic_id`` and every later mosaic and slice.
+
+        Mosaic ids are global, so "later" means a higher mosaic id. When earlier
+        mosaics of ``slice_id`` remain, that slice's registration/upload flags and
+        status are reset since it must be registered again. Returns the deleted
+        ``(slice_id, mosaic_id)`` pairs.
+        """
+        removed: list[tuple[int, int]] = []
+        for sid in sorted(self.slices):
+            if sid < slice_id:
+                continue
+            slice_state = self.slices[sid]
+            doomed = sorted(m for m in slice_state.mosaics if sid > slice_id or m >= mosaic_id)
+            for mid in doomed:
+                del slice_state.mosaics[mid]
+                removed.append((sid, mid))
+            if sid > slice_id or not slice_state.mosaics:
+                del self.slices[sid]
+            elif doomed:
+                slice_state.reset_registered()
+                slice_state.mark_pending()
+        self.touch()
+        return removed
 
 
 def _get_slice_view(

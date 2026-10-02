@@ -85,6 +85,8 @@ def parse_input_name(name, acquisition, mosaics_per_slice, *, slice_id=None, mos
         if modality is None:
             return None
         position = sequence.locate(image)
+        if position is None:  # numbered before the sequence's start image
+            return None
         return InputTile(position.source_mosaic_id, position.tile, modality)
     slot = mosaic_slot
     if "acq" in values:

@@ -258,6 +258,7 @@ def process_tile_batch(
         file_list,
         config=config,
         mosaic_context=mosaic_context,
+        batch_id=batch_id.batch_id,
     )
     file_reference_list = list(file_reference_list.values())
 

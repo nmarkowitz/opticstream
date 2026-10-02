@@ -198,6 +198,7 @@ def archive_tile_batch_flow(
         file_list,
         config=config,
         mosaic_context=mosaic_context,
+        batch_id=batch_id.batch_id,
     )
     archive_tile_batch(
         batch_id=batch_id,

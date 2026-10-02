@@ -35,11 +35,11 @@ with overlapping slice/tile IDs in the same watched directory.
 
 If the scanner only numbers its output (`spectral_0001.nii`, `spectral_0002.nii`,
 ...), set `"filename_pattern": "spectral_{image}.nii"`. The numbers are then one
-continuous sequence across mosaics and slices, and `--slice`/`--mosaic` say where
-image 1 starts (both default to 1):
+continuous sequence across mosaics and slices. A new project starts at slice 1
+mosaic 1, so no options are needed:
 
 ```bash
-ops oct watch myproject /path/to/scanner/output --slice 1 --mosaic 1
+ops oct watch myproject /path/to/scanner/output
 ```
 
 With 22 x 16 grids for both illuminations, that places:
@@ -52,15 +52,40 @@ With 22 x 16 grids for both illuminations, that places:
 | ... | ... | ... |
 
 Each mosaic holds `grid_size_x * grid_size_y` tiles, using `grid_size_x_normal` or
-`grid_size_x_tilted` (and `grid_size_y_tilted`, when set) for its illumination, and its tiles are renumbered from 1. After
-the slice's last mosaic the sequence continues with mosaic 1 of the next slice.
-Placement depends only on the image number, so restarting the watcher is safe.
+`grid_size_x_tilted` (and `grid_size_y_tilted`, when set) for its illumination, and
+its tiles are renumbered from 1. After the slice's last mosaic the sequence
+continues with mosaic 1 of the next slice.
+
+### Where the sequence starts is saved in project state
+
+The watcher records which image is tile 1 of which slice/mosaic, and in which
+folder (`sequence_anchor`, shown by `ops oct state show`). On each start:
+
+- **No `--slice`/`--mosaic`, same folder:** resume the saved start. Restarting
+  the watcher is safe; batches already in project state are skipped.
+- **No `--slice`/`--mosaic`, new folder:** continue with the mosaic after the last
+  one recorded in project state, starting at the folder's lowest image number
+  (1 if it is empty).
+- **`--slice S --mosaic M`:** restart there. Slice S mosaic M and every later mosaic
+  are cleared from project state, so they are processed, archived and stitched
+  again. For example `--slice 5 --mosaic 2` redoes slice 5 mosaic 2, and the next
+  mosaic after it is slice 6 mosaic 1.
+
+When restarting, the first new file is taken to be:
+
+- in the folder already in use: the image after the highest number present (the
+  scanner kept counting; older files are ignored);
+- in a new folder: its lowest image number, or image 1 if it is empty.
+
+Pass `--start-image N` when that guess is wrong, e.g. the scanner restarted at 1 in
+the same folder and has already written some files. Running the same
+`--slice`/`--mosaic` again on the same folder resumes rather than clearing again;
+add `--start-image` to redo that mosaic once more.
 
 `--mosaic` is the mosaic's position within its slice (1..`mosaics_per_slice`, e.g.
 1 = normal, 2 = tilted), not a global mosaic id. `--acquisition` may name that
-position by its `acquisition_mosaic_map` label instead; you never need both. To
-start a folder partway through, e.g. with the tilted mosaic of slice 3, pass
-`--slice 3 --mosaic 2`. `--slice-offset` still shifts the resulting slice numbers.
+position by its `acquisition_mosaic_map` label instead; you never need both.
+`--slice-offset` still shifts the resulting slice numbers.
 
 A batch number beyond a mosaic's `grid_size_x` is never dispatched (it is logged
 and ignored), whatever the naming.

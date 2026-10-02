@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 from opticstream.cli.oct.watch import OCTWatcherService, build_watch_previews
 from opticstream.config.psoct_scan_config import PSOCTAcquisitionParams
-from opticstream.utils.acquisition_sequence import AcquisitionSequence
+from opticstream.flows.psoct.tile_file_reference import build_tile_file_reference_list
+from opticstream.flows.psoct.utils import mosaic_context_from_ids
+from opticstream.state.oct_project_state import OCTProjectState, OCTSequenceAnchor
+from opticstream.utils.acquisition_sequence import AcquisitionSequence, start_sequence
 
 BIG = 100 * 1024  # the watcher ignores files smaller than 100 KB
 
@@ -62,9 +65,132 @@ class SequenceTests(unittest.TestCase):
         self.assertIsNone(seq.first_image(5, 1))
 
     def test_invalid_start(self):
-        for kwargs in ({"start_slice": 0}, {"start_mosaic": 3}, {"start_mosaic": 0}):
+        for kwargs in ({"start_slice": 0}, {"start_mosaic": 3}, {"start_mosaic": 0},
+                       {"start_image": 0}):
             with self.assertRaises(ValueError):
                 AcquisitionSequence(config(), **kwargs)
+
+    def test_start_image_shifts_numbering(self):
+        # Scanner kept counting: image 21 is tile 1 of slice 5 mosaic 2.
+        seq = AcquisitionSequence(config(normal=3, tilted=2, rows=2), start_slice=5,
+                                  start_mosaic=2, start_image=21)
+        self.assertIsNone(seq.locate(20))
+        where = lambda i: (lambda p: (p.slice_id, p.mosaic_slot, p.tile))(seq.locate(i))
+        self.assertEqual([where(i) for i in (21, 24, 25, 31)],
+                         [(5, 2, 1), (5, 2, 4), (6, 1, 1), (6, 2, 1)])
+        self.assertEqual(seq.first_image(6, 1), 25)
+
+
+def project(*mosaics):
+    """Project state with one batch in each (slice_id, mosaic_id)."""
+    state = OCTProjectState()
+    for slice_id, mosaic_id in mosaics:
+        state.get_or_create_batch(slice_id, mosaic_id, 1)
+    return state
+
+
+class ProjectClearTests(unittest.TestCase):
+    def test_clear_from_second_mosaic_keeps_first_and_resets_slice(self):
+        state = project((4, 7), (4, 8), (5, 9), (5, 10), (6, 11))
+        state.slices[5].set_registered(True)
+        removed = state.clear_from_mosaic(5, 10)
+        self.assertEqual(removed, [(5, 10), (6, 11)])
+        self.assertEqual(sorted(state.slices), [4, 5])
+        self.assertEqual(list(state.slices[5].mosaics), [9])
+        self.assertFalse(state.slices[5].registered)
+        self.assertEqual(sorted(state.slices[4].mosaics), [7, 8])
+
+    def test_clear_from_first_mosaic_drops_slice(self):
+        state = project((5, 9), (5, 10))
+        self.assertEqual(state.clear_from_mosaic(5, 9), [(5, 9), (5, 10)])
+        self.assertEqual(state.slices, {})
+        self.assertEqual(state.last_mosaic_id(), None)
+
+
+class StartSequenceTests(unittest.TestCase):
+    cfg = config(normal=3, tilted=2, rows=2)  # mosaic 1: 6 tiles, mosaic 2: 4 tiles
+
+    def start(self, state, images, folder="/scan/a", **kwargs):
+        seq, _ = start_sequence(state, self.cfg, folder, set(images), **kwargs)
+        anchor = state.sequence_anchor
+        return seq, (anchor.folder, anchor.start_image, anchor.slice_id, anchor.mosaic_slot)
+
+    def test_new_project_starts_at_slice_one(self):
+        state = project()
+        _, anchor = self.start(state, range(1, 5))
+        self.assertEqual(anchor, ("/scan/a", 1, 1, 1))
+
+    def test_resumes_saved_start_for_same_folder(self):
+        state = project((1, 1))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", start_image=7,
+                                                  slice_id=3, mosaic_slot=2)
+        seq, anchor = self.start(state, range(1, 30))
+        self.assertEqual(anchor[1:], (7, 3, 2))
+        self.assertEqual(list(state.slices), [1])  # nothing cleared
+
+    def test_reset_in_same_folder_continues_after_highest_image(self):
+        state = project((5, 9), (5, 10), (6, 11))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", slice_id=1, mosaic_slot=1)
+        seq, anchor = self.start(state, range(1, 21), slice_id=5, mosaic_slot=2)
+        self.assertEqual(anchor, ("/scan/a", 21, 5, 2))
+        self.assertEqual(list(state.slices[5].mosaics), [9])
+        self.assertNotIn(6, state.slices)
+        # Slice 5 mosaic 2 is redone (4 tiles), then the next mosaic is slice 6 mosaic 1.
+        self.assertEqual((seq.locate(21).slice_id, seq.locate(21).mosaic_slot), (5, 2))
+        self.assertEqual((seq.locate(25).slice_id, seq.locate(25).mosaic_slot), (6, 1))
+        self.assertIsNone(seq.locate(20))
+
+    def test_repeating_same_reset_resumes_instead_of_clearing(self):
+        state = project((5, 10))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", start_image=21,
+                                                  slice_id=5, mosaic_slot=2)
+        _, anchor = self.start(state, range(1, 26), slice_id=5, mosaic_slot=2)
+        self.assertEqual(anchor[1:], (21, 5, 2))
+        self.assertIn(10, state.slices[5].mosaics)
+        # --start-image forces a fresh reset of the same mosaic.
+        _, anchor = self.start(state, range(1, 26), slice_id=5, mosaic_slot=2, start_image=26)
+        self.assertEqual(anchor[1:], (26, 5, 2))
+        self.assertNotIn(5, state.slices)
+
+    def test_reset_in_new_folder_starts_at_its_lowest_image(self):
+        state = project((5, 10))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", slice_id=1, mosaic_slot=1)
+        _, anchor = self.start(state, [1, 2, 3], folder="/scan/b", slice_id=5, mosaic_slot=2)
+        self.assertEqual(anchor, ("/scan/b", 1, 5, 2))
+        _, anchor = self.start(state, [], folder="/scan/c", slice_id=7, mosaic_slot=1)
+        self.assertEqual(anchor, ("/scan/c", 1, 7, 1))
+
+    def test_new_folder_continues_after_last_mosaic_in_state(self):
+        state = project((5, 9), (5, 10))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", slice_id=1, mosaic_slot=1)
+        _, anchor = self.start(state, [], folder="/scan/b")
+        self.assertEqual(anchor, ("/scan/b", 1, 6, 1))
+        state = project((5, 9))
+        state.sequence_anchor = OCTSequenceAnchor(folder="/scan/a", slice_id=1, mosaic_slot=1)
+        _, anchor = self.start(state, [], folder="/scan/b")
+        self.assertEqual(anchor[2:], (5, 2))
+
+    def test_unanchored_project_with_state_needs_start_image(self):
+        state = project((1, 1))
+        with self.assertRaises(ValueError):
+            self.start(state, range(1, 10), slice_id=5, mosaic_slot=2)
+        _, anchor = self.start(state, range(1, 10), slice_id=5, mosaic_slot=2, start_image=4)
+        self.assertEqual(anchor[1:], (4, 5, 2))
+
+    def test_start_image_requires_slice_or_mosaic(self):
+        with self.assertRaises(ValueError):
+            self.start(project(), [], start_image=5)
+
+
+class TileNumberTests(unittest.TestCase):
+    def test_continuous_names_numbered_within_mosaic(self):
+        cfg = config(normal=22, tilted=22, rows=16)
+        context = mosaic_context_from_ids(slice_id=1, mosaic_id=2, mosaics_per_slice=2)
+        files = [Path(f"/scan/spectral_{i:04d}.nii") for i in range(369, 385)]
+        refs = build_tile_file_reference_list(files, config=cfg, mosaic_context=context,
+                                              batch_id=2)
+        self.assertEqual(sorted(refs), list(range(17, 33)))
+        self.assertEqual(refs[17].spectral_file_path.name, "spectral_0369.nii")
 
 
 class WatcherSequenceTests(unittest.TestCase):
@@ -105,6 +231,17 @@ class WatcherSequenceTests(unittest.TestCase):
         self.assertEqual([(m, b, len(files)) for m, b, files in found],
                          [(1, 1, 2), (1, 2, 2), (2, 1, 3), (2, 2, 3)])
         self.assertEqual(found[3][2], ("spectral_0008.nii", "spectral_0009.nii", "spectral_0010.nii"))
+
+    def test_files_before_start_image_are_ignored(self):
+        cfg = config(normal=3, tilted=2, rows=2)
+        with TemporaryDirectory() as folder:
+            write(folder, [f"spectral_{i:04d}.nii" for i in range(1, 27)])
+            seq = AcquisitionSequence(cfg, start_slice=5, start_mosaic=2, start_image=21)
+            found = self.batches(self.watcher(folder, cfg, sequence=seq))
+        # Images 21-24 redo slice 5 mosaic 2 (mosaic 10); 25-26 start slice 6 (mosaic 11).
+        self.assertEqual([(m, b, files[0]) for m, b, files in found],
+                         [(10, 1, "spectral_0021.nii"), (10, 2, "spectral_0023.nii"),
+                          (11, 1, "spectral_0025.nii")])
 
     def test_fixed_mosaic_ignores_batches_beyond_grid(self):
         cfg = config(normal=3, tilted=2, rows=2)

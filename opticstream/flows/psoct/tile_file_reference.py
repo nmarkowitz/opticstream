@@ -39,17 +39,43 @@ def build_tile_file_reference_list(
     *,
     config: PSOCTScanConfigModel,
     mosaic_context: MosaicContext,
+    batch_id: int | None = None,
 ) -> dict[int, TileFileReference]:
+    """
+    Group a batch's input files by tile number.
+
+    For continuously numbered names (filename_pattern without {slice}/{acq}) the
+    image number is not the tile number within the mosaic; with ``batch_id`` the
+    batch's lowest image becomes tile ``(batch_id - 1) * grid_size_y + 1``. This
+    assumes the batch's images are consecutive from its first tile, as the watcher
+    dispatches them.
+    """
     mosaics_per_slice = config.mosaics_per_slice
     grid_size_x = mosaic_context.grid_size_x(config)
     refs: dict[int, TileFileReference] = defaultdict(TileFileReference)
+    tile_shift = 0
+    pattern = config.acquisition.filename_pattern
+    if pattern and batch_id is not None:
+        from opticstream.utils.oct_input_naming import parse_input_name, pattern_names_mosaic
+        if not pattern_names_mosaic(pattern):
+            parsed_images = [
+                parsed.image_index
+                for parsed in (
+                    parse_input_name(p.name, config.acquisition, mosaics_per_slice)
+                    for p in file_list
+                )
+                if parsed is not None
+            ]
+            if parsed_images:
+                first_tile = (batch_id - 1) * mosaic_context.grid_size_y(config) + 1
+                tile_shift = first_tile - min(parsed_images)
     for p in file_list:
-        if config.acquisition.filename_pattern:
+        if pattern:
             from opticstream.utils.oct_input_naming import parse_input_name
             parsed = parse_input_name(p.name, config.acquisition, mosaics_per_slice)
             if parsed is None:
                 raise ValueError(f"Filename does not match configured input naming: {p.name}")
-            tile_number = parsed.image_index
+            tile_number = parsed.image_index + tile_shift
             modality = parsed.modality
             if modality == "processed":
                 modality = "complex" if config.acquisition.tile_saving_type in (TileSavingType.COMPLEX_WITH_SPECTRAL, TileSavingType.COMPLEX) else "dbi"

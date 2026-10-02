@@ -30,8 +30,8 @@ from opticstream.utils.filename_utils import (
     extract_processed_index_from_filename,
     extract_spectral_index_from_filename,
 )
-from opticstream.utils.acquisition_sequence import AcquisitionSequence
-from opticstream.utils.oct_input_naming import pattern_names_mosaic
+from opticstream.utils.acquisition_sequence import AcquisitionSequence, start_sequence
+from opticstream.utils.oct_input_naming import compile_pattern, pattern_names_mosaic
 from opticstream.utils.polling_watcher import PollingStableWatcher
 from opticstream.utils.refresh_disk import RefreshHook, resolve_refresh_hook
 
@@ -824,6 +824,46 @@ def build_watch_previews(
     )
 
 
+def _sequence_images(folder: Path, pattern: str) -> set[int]:
+    """Image numbers of the files in ``folder`` that match ``pattern``."""
+    regex = compile_pattern(pattern)
+    images: set[int] = set()
+    for path in folder.iterdir():
+        match = regex.fullmatch(path.name)
+        if match is not None and path.is_file():
+            images.add(int(match.group("image")))
+    return images
+
+
+def load_sequence(
+    project_name: str,
+    scan_config: PSOCTScanConfigModel,
+    folder: Path,
+    *,
+    slice_id: int | None,
+    mosaic_slot: int | None,
+    start_image: int | None,
+    slice_offset: int,
+) -> AcquisitionSequence:
+    """Resolve and save the continuous-numbering start in project state (see start_sequence)."""
+    folder_key = os.path.normcase(str(folder.resolve()))
+    images = _sequence_images(folder, scan_config.acquisition.filename_pattern)
+    with OCT_STATE_SERVICE.open_project_by_parts(project_name=project_name) as project:
+        sequence, notes = start_sequence(
+            project,
+            scan_config,
+            folder_key,
+            images,
+            slice_id=slice_id,
+            mosaic_slot=mosaic_slot,
+            start_image=start_image,
+            slice_offset=slice_offset,
+        )
+    for note in notes:
+        logger.info("%s", note)
+    return sequence
+
+
 def watch_oct(
     *,
     project_name: str,
@@ -889,6 +929,7 @@ def watch(
     slice: int | None = None,
     acquisition: str | None = None,
     mosaic: int | None = None,
+    start_image: int | None = None,
     previews: bool = True,
     batch_previews: bool = False,
     verbose: bool = False,
@@ -912,10 +953,19 @@ def watch(
     its acquisition.acquisition_mosaic_map label instead of --mosaic.
 
     When acquisition.filename_pattern has no {slice} or {acq} (e.g.
-    "spectral_{image}.nii"), image numbers are one continuous sequence: image 1 is
-    the start mosaic (default slice 1, mosaic 1), and after that mosaic's
-    grid_size_x * grid_size_y tiles the sequence continues into the next mosaic
-    and then the next slice, each sized by its own grid.
+    "spectral_{image}.nii"), image numbers are one continuous sequence: after a
+    mosaic's grid_size_x * grid_size_y tiles it continues into the next mosaic and
+    then the next slice, each sized by its own grid. Where it starts is saved in
+    project state:
+      - without --slice/--mosaic the watcher resumes the saved start for this
+        folder; a new project starts at slice 1 mosaic 1, and a new folder continues
+        with the mosaic after the last one in project state.
+      - --slice/--mosaic restart there: that mosaic and every later one are cleared
+        from project state and redone, e.g. --slice 5 --mosaic 2 redoes slice 5
+        mosaic 2 and the next mosaic is slice 6 mosaic 1. The new files start after
+        the highest image already in a folder in use, or at the lowest image of a new
+        folder; --start-image N says otherwise. Rerunning the same --slice/--mosaic on
+        the same folder resumes rather than clearing again.
 
     When filenames contain {slice}/{acq}, the names place each tile and
     --slice/--mosaic only filter which tiles this watcher handles.
@@ -951,18 +1001,22 @@ def watch(
     sequence = None
     filename_pattern = scan_config.acquisition.filename_pattern
     if filename_pattern and not pattern_names_mosaic(filename_pattern):
-        sequence = AcquisitionSequence(
+        sequence = load_sequence(
+            project_name,
             scan_config,
-            start_slice=fixed_slice_id or 1,
-            start_mosaic=fixed_mosaic_slot or 1,
+            watch_path,
+            slice_id=fixed_slice_id,
+            mosaic_slot=fixed_mosaic_slot,
+            start_image=start_image,
+            slice_offset=slice_offset,
         )
-        logger.info(
-            "Continuous numbering: image 1 is slice %s mosaic %s; mosaic sizes %s tiles",
-            sequence.start_slice,
-            sequence.start_mosaic,
-            sequence.sizes,
-        )
+        logger.info("Continuous numbering; mosaic sizes %s tiles", sequence.sizes)
         fixed_slice_id = fixed_mosaic_slot = None
+    elif start_image is not None:
+        raise ValueError(
+            "--start-image only applies to continuously numbered files "
+            "(filename_pattern without {slice} or {acq})."
+        )
     elif (fixed_slice_id, fixed_mosaic_slot) != (None, None):
         if scan_config.mosaics_per_slice == 3 and not filename_pattern:
             raise ValueError(
